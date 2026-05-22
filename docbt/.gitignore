@@ -6,5 +6,6 @@ __pycache__/
 .mypy_cache/
 
 # generated synthetic data + DuckDB output
+target/
 examples/**/data/
 examples/**/target/
