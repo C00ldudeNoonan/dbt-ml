@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: open_tickets
+    description: "Tickets currently open (not resolved or closed)"
+    depends_on:
+      - ref('raw_tickets')
+
+    transform:
+      type: python
+      module: transforms.open_tickets
+
+    materialization: full
+
+    fields:
+      - name: ticket_id
+      - name: priority
+      - name: status
+      - name: assigned_team
+      - name: customer_tier
+      - name: age_hours
+
+    tags: [mart, tickets]
+
+    tests:
+      - not_null: [ticket_id, age_hours]
+      - unique: ticket_id

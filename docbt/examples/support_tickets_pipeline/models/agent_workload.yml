@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: agent_workload
+    description: "Per-team workload: open ticket counts by priority"
+    depends_on:
+      - ref('raw_tickets')
+
+    transform:
+      type: python
+      module: transforms.agent_workload
+
+    materialization: full
+
+    fields:
+      - name: assigned_team
+      - name: open_total
+      - name: urgent_open
+      - name: high_open
+      - name: medium_open
+      - name: low_open
+
+    tags: [mart, tickets, workload]
+
+    tests:
+      - not_null: [assigned_team, open_total]
+      - unique: assigned_team

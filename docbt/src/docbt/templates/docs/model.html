@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ model.name }}{% endblock %}
+{% block content %}
+<h1>
+  {{ model.name }}
+  <span class="kind-{{ model.kind }}">[{{ model.kind }}]</span>
+</h1>
+<p>{{ model.description or '' }}</p>
+<p class="muted">
+  Materialization: <code>{{ model.materialization }}</code> ·
+  code_version: <code>{{ model.code_version }}</code>
+  {% if model.tags %} · {% for t in model.tags %}<span class="tag">{{ t }}</span>{% endfor %}{% endif %}
+</p>
+
+{% if model.depends_on %}
+<h2>Depends on</h2>
+<ul>{% for d in model.depends_on %}<li><code>{{ d }}</code></li>{% endfor %}</ul>
+{% elif model.source %}
+<h2>Source</h2>
+<p><code>{{ model.source }}</code></p>
+{% endif %}
+
+{% if model.extraction %}
+<h2>Extraction</h2>
+<p>Backend: <code>{{ model.extraction.backend }}</code></p>
+{% if model.extraction.options %}
+<pre><code>{{ model.extraction.options | tojson(indent=2) }}</code></pre>
+{% endif %}
+{% endif %}
+
+{% if model.transform %}
+<h2>Transform</h2>
+<p>Module: <code>{{ model.transform.module }}</code></p>
+{% endif %}
+
+{% if model.fields %}
+<h2>Fields</h2>
+<table>
+  <thead><tr><th>Name</th><th>Description</th></tr></thead>
+  <tbody>
+  {% for f in model.fields %}
+    <tr><td><code>{{ f.name }}</code></td><td>{{ f.description or '' }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if model.tests %}
+<h2>Tests</h2>
+<ul>
+{% for t in model.tests %}<li><code>{{ t }}</code></li>{% endfor %}
+</ul>
+{% endif %}
+
+{% if last_run %}
+<h2>Last run</h2>
+<table>
+  <tr><th>processed</th><td>{{ last_run.documents_processed }}</td></tr>
+  <tr><th>skipped</th><td>{{ last_run.documents_skipped }}</td></tr>
+  <tr><th>rows written</th><td>{{ last_run.rows_written }}</td></tr>
+  <tr><th>duration (s)</th><td>{{ last_run.duration_seconds }}</td></tr>
+  {% if last_run.errors %}
+  <tr><th>errors</th><td><pre><code>{{ last_run.errors | join('\n') }}</code></pre></td></tr>
+  {% endif %}
+</table>
+{% endif %}
+{% endblock %}

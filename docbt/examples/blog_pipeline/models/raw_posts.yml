@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: raw_posts
+    description: "Parse frontmatter + body from markdown blog posts"
+    source: ref('blog_posts')
+
+    extraction:
+      backend: markdown
+      options:
+        frontmatter_fields: [title, author, date, tags]
+        include_body: true
+        compute_word_count: true
+
+    materialization: incremental
+
+    fields:
+      - name: title
+      - name: author
+      - name: date
+      - name: tags
+      - name: body
+      - name: word_count
+
+    tests:
+      - not_null: [title, author, date]
+      - unique: source_path

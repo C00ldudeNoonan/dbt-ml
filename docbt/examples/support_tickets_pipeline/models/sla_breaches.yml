@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: sla_breaches
+    description: "Tickets that have breached their first-response SLA"
+    depends_on:
+      - ref('raw_tickets')
+
+    transform:
+      type: python
+      module: transforms.sla_breaches
+
+    materialization: full
+
+    fields:
+      - name: ticket_id
+      - name: priority
+      - name: customer_tier
+      - name: assigned_team
+      - name: sla_target_hours
+      - name: response_age_hours
+      - name: breach_hours
+
+    tags: [mart, tickets, sla]
+
+    tests:
+      - not_null: [ticket_id, breach_hours]

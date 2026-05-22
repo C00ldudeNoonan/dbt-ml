@@ -1,0 +1,238 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import threading
+from pathlib import Path
+from typing import Any
+
+import duckdb
+
+from .base import BaseBackend, ExtractionResult
+from .registry import register
+
+_DEFAULT_MODEL = "claude-haiku-4-5"
+_DEFAULT_SYSTEM = (
+    "You extract structured fields from documents. "
+    "Call the `extract` tool with the requested fields. "
+    "If a field is genuinely missing from the document, use null."
+)
+
+# DuckDB cache writes can race when extraction is parallelized; serialize them.
+_CACHE_WRITE_LOCK = threading.Lock()
+
+
+@register
+class LLMBackend(BaseBackend):
+    """LLM-based extraction backend.
+
+    Configures a schema in YAML; calls Claude with tool use to enforce structured
+    output; caches responses in a DuckDB file keyed on (model, content_hash,
+    schema_hash) so re-runs are free.
+
+    Options:
+        model:        Claude model id (default: claude-haiku-4-5)
+        system_prompt: Override system prompt
+        cache_path:   Path to cache file (recommended: ./target/llm_cache.duckdb)
+        fields:       [{name, type, description?}] — schema for tool input_schema
+    """
+
+    def name(self) -> str:
+        return "llm"
+
+    def supported_formats(self) -> list[str]:
+        return [".txt", ".md"]
+
+    def extract(self, path: Path, options: dict[str, Any]) -> ExtractionResult:
+        fields_spec = options.get("fields")
+        if not fields_spec or not isinstance(fields_spec, list):
+            raise ValueError(
+                "llm backend requires `options.fields: [{name, type, ...}]`"
+            )
+
+        fields = extract_fields_from_text(
+            path.read_text(),
+            fields_spec=fields_spec,
+            model=options.get("model", _DEFAULT_MODEL),
+            system=options.get("system_prompt", _DEFAULT_SYSTEM),
+            cache_path=options.get("cache_path"),
+            call_api=self._call_api,
+        )
+        return ExtractionResult(fields=fields)
+
+    def _call_api(
+        self,
+        content: str,
+        model: str,
+        system: str,
+        fields_spec: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return _default_call_api(content, model, system, fields_spec)
+
+
+def extract_fields_from_text(
+    text: str,
+    *,
+    fields_spec: list[dict[str, Any]],
+    model: str = _DEFAULT_MODEL,
+    system: str = _DEFAULT_SYSTEM,
+    cache_path: str | Path | None = None,
+    call_api: Any = None,
+) -> dict[str, Any]:
+    """Extract structured fields from a string of text by calling Claude.
+
+    Reusable from transform models that need to LLM-process rows of text
+    (e.g. text extracted from PDFs in an upstream model).
+
+    `call_api` is injectable for testing; defaults to the real Anthropic call.
+    """
+    content_hash = hashlib.blake2b(text.encode(), digest_size=8).hexdigest()
+    schema_hash = _hash_schema(system, fields_spec)
+    cache_key = f"{model}|{content_hash}|{schema_hash}"
+
+    cache_path_obj = Path(cache_path) if cache_path is not None else None
+    if cache_path_obj is not None:
+        cached = _cache_get(cache_path_obj, cache_key)
+        if cached is not None:
+            return cached
+
+    fn = call_api or _default_call_api
+    result_fields: dict[str, Any] = fn(text, model, system, fields_spec)
+
+    if cache_path_obj is not None:
+        _cache_put(
+            cache_path_obj,
+            cache_key,
+            model=model,
+            content_hash=content_hash,
+            schema_hash=schema_hash,
+            fields=result_fields,
+        )
+    return result_fields
+
+
+def _default_call_api(
+    content: str,
+    model: str,
+    system: str,
+    fields_spec: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is not set. Either export it or seed the "
+            "llm cache so re-runs hit cached responses."
+        )
+    from anthropic import Anthropic
+
+    client = Anthropic()
+    tool = {
+        "name": "extract",
+        "description": "Return the extracted structured fields from the document.",
+        "input_schema": _input_schema(fields_spec),
+    }
+    resp = client.messages.create(
+        model=model,
+        max_tokens=2048,
+        system=[
+            {
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        tools=[tool],
+        tool_choice={"type": "tool", "name": "extract"},
+        messages=[{"role": "user", "content": content}],
+    )
+    for block in resp.content:
+        if getattr(block, "type", None) == "tool_use" and block.name == "extract":
+            return dict(block.input)
+    raise RuntimeError("LLM did not return an `extract` tool call")
+
+
+def _input_schema(fields_spec: list[dict[str, Any]]) -> dict[str, Any]:
+    properties: dict[str, Any] = {}
+    for f in fields_spec:
+        name = f["name"]
+        ftype = f.get("type", "string")
+        prop: dict[str, Any] = {"type": ftype}
+        if "description" in f:
+            prop["description"] = f["description"]
+        if ftype == "array":
+            prop["items"] = f.get("items", {"type": "string"})
+        properties[name] = prop
+    return {"type": "object", "properties": properties}
+
+
+def _hash_schema(system: str, fields_spec: list[dict[str, Any]]) -> str:
+    canonical = json.dumps(
+        {"system": system, "fields": fields_spec}, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.blake2b(canonical.encode(), digest_size=8).hexdigest()
+
+
+def _cache_get(path: Path, key: str) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    con = duckdb.connect(str(path), read_only=True)
+    try:
+        row = con.execute(
+            "SELECT response_json FROM llm_cache WHERE cache_key = ?", [key]
+        ).fetchone()
+    except duckdb.CatalogException:
+        return None
+    finally:
+        con.close()
+    return json.loads(row[0]) if row else None
+
+
+def _cache_put(
+    path: Path,
+    key: str,
+    *,
+    model: str,
+    content_hash: str,
+    schema_hash: str,
+    fields: dict[str, Any],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _CACHE_WRITE_LOCK:
+        _cache_put_locked(path, key, model, content_hash, schema_hash, fields)
+
+
+def _cache_put_locked(
+    path: Path,
+    key: str,
+    model: str,
+    content_hash: str,
+    schema_hash: str,
+    fields: dict[str, Any],
+) -> None:
+    con = duckdb.connect(str(path))
+    try:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS llm_cache (
+                cache_key VARCHAR PRIMARY KEY,
+                model VARCHAR NOT NULL,
+                content_hash VARCHAR NOT NULL,
+                schema_hash VARCHAR NOT NULL,
+                response_json VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO llm_cache
+                (cache_key, model, content_hash, schema_hash, response_json, created_at)
+            VALUES (?, ?, ?, ?, ?, current_timestamp)
+            ON CONFLICT (cache_key) DO UPDATE SET
+                response_json = excluded.response_json,
+                created_at    = excluded.created_at
+            """,
+            [key, model, content_hash, schema_hash, json.dumps(fields)],
+        )
+    finally:
+        con.close()

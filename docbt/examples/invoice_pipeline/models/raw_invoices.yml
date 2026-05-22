@@ -1,0 +1,26 @@
+version: 2
+
+models:
+  - name: raw_invoices
+    description: "Project synthetic invoice JSON into a typed table"
+    source: ref('vendor_invoices')
+
+    extraction:
+      backend: json
+      options:
+        fields: [invoice_id, vendor, issue_date, line_items, total, currency]
+
+    materialization: incremental
+    tags: [raw, invoices]
+
+    fields:
+      - name: invoice_id
+      - name: vendor
+      - name: issue_date
+      - name: total
+      - name: line_items
+      - name: currency
+
+    tests:
+      - not_null: [vendor, total]
+      - unique: invoice_id

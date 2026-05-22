@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: pages
+    description: "HTML pages (point me at your folder of saved/scraped pages)"
+    path: "./data/pages/"
+    file_pattern: "*.html"
+    recursive: true

@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: posts_by_author
+    description: "Per-author post counts and word totals"
+    depends_on:
+      - ref('raw_posts')
+
+    transform:
+      type: python
+      module: transforms.posts_by_author
+
+    materialization: full
+
+    fields:
+      - name: author
+      - name: post_count
+      - name: total_words
+
+    tests:
+      - not_null: [author, post_count, total_words]
+      - unique: author
+      - min_rows: 1

@@ -1,0 +1,41 @@
+version: 2
+
+models:
+  - name: raw_invoices_llm
+    description: "LLM-extracted invoice fields from free-form text"
+    source: ref('invoice_documents')
+
+    extraction:
+      backend: llm
+      options:
+        # model and cache_path come from the active profile's `llm:` block;
+        # override here if a specific model needs e.g. a stronger Claude tier.
+        fields:
+          - name: vendor
+            type: string
+            description: "The supplier company name (after 'From:')"
+          - name: invoice_id
+            type: string
+            description: "The invoice identifier (e.g. INV-00042)"
+          - name: issue_date
+            type: string
+            description: "ISO date in YYYY-MM-DD format"
+          - name: currency
+            type: string
+            description: "Three-letter currency code (USD, EUR, GBP, CAD)"
+          - name: total
+            type: number
+            description: "Total amount due as a number"
+
+    materialization: incremental
+
+    fields:
+      - name: vendor
+      - name: invoice_id
+      - name: issue_date
+      - name: currency
+      - name: total
+
+    tests:
+      - not_null: [vendor, invoice_id, total]
+      - unique: invoice_id

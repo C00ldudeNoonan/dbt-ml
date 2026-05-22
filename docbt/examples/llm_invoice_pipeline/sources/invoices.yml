@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: invoice_documents
+    description: "Free-form invoice texts (synthetic plaintext, not JSON)"
+    path: "./data/invoices_text/"
+    file_pattern: "*.txt"
+    recursive: true

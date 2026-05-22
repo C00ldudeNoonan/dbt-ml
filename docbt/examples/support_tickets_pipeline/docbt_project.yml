@@ -1,0 +1,11 @@
+name: support_tickets_pipeline
+version: "0.1.0"
+profile: support_tickets_pipeline
+
+extraction:
+  default_backend: json
+
+source-paths: ["sources"]
+model-paths: ["models"]
+transform-paths: ["transforms"]
+target-path: "target"

@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: extracted_invoices
+    description: "LLM-extracted structured invoice fields from raw PDF text"
+    depends_on:
+      - ref('raw_pdf_text')
+
+    transform:
+      type: python
+      module: transforms.llm_extract
+
+    materialization: full
+
+    fields:
+      - name: document_id
+      - name: invoice_id
+      - name: vendor
+      - name: issue_date
+      - name: currency
+      - name: total
+
+    tags: [extracted, llm]
+
+    tests:
+      - not_null: [vendor, invoice_id, total]
+      - unique: invoice_id
