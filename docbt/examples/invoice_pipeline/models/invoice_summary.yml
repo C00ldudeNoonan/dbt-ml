@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: invoice_summary
+    description: "Per-vendor aggregation"
+    depends_on:
+      - ref('raw_invoices')
+
+    transform:
+      type: python
+      module: transforms.summarize
+
+    materialization: full
+    tags: [agg, invoices]
+
+    fields:
+      - name: vendor
+      - name: invoice_count
+      - name: total_spend
+
+    tests:
+      - not_null: [vendor, invoice_count, total_spend]
+      - min_rows: 1

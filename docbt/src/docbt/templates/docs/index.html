@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }}{% endblock %}
+{% block content %}
+<h1>{{ project.name }} <span class="muted">v{{ project.version }}</span></h1>
+<p class="muted">
+  Warehouse: <code>{{ project.duckdb_path }}</code> ·
+  Schema: <code>{{ project.duckdb_schema }}</code> ·
+  Profile: <code>{{ project.profile }}</code> ·
+  Target: <code>{{ project.target }}</code>
+</p>
+
+<h2>Sources <span class="muted">({{ sources|length }})</span></h2>
+{% for s in sources %}
+<div class="card">
+  <h3 class="kind-source">{{ s.name }}</h3>
+  {% if s.description %}<p>{{ s.description }}</p>{% endif %}
+  <p>
+    Path: <code>{{ s.path }}</code> · Pattern: <code>{{ s.file_pattern }}</code>
+    {% if s.tags %} · {% for t in s.tags %}<span class="tag">{{ t }}</span>{% endfor %}{% endif %}
+  </p>
+</div>
+{% endfor %}
+
+<h2>Models <span class="muted">({{ models|length }})</span></h2>
+{% for m in models %}
+<div class="card">
+  <h3>
+    <a href="model_{{ m.name }}.html">{{ m.name }}</a>
+    <span class="kind-{{ m.kind }}">[{{ m.kind }}]</span>
+    <span class="muted">— {{ m.materialization }}</span>
+  </h3>
+  {% if m.description %}<p>{{ m.description }}</p>{% endif %}
+  <p>
+    {% if m.tags %}{% for t in m.tags %}<span class="tag">{{ t }}</span>{% endfor %}{% endif %}
+    {% if m.depends_on %}
+      · depends on: {% for d in m.depends_on %}<code>{{ d }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+    {% elif m.source %}
+      · source: <code>{{ m.source }}</code>
+    {% endif %}
+  </p>
+  <p class="muted">code_version: <code>{{ m.code_version }}</code></p>
+</div>
+{% endfor %}
+
+<h2>Execution order</h2>
+<ol>
+  {% for name in dag.execution_order %}<li><a href="model_{{ name }}.html">{{ name }}</a></li>{% endfor %}
+</ol>
+
+<h2>DAG (Mermaid)</h2>
+<pre><code>graph LR
+{% for edge in dag.edges %}    {{ edge[0] }} --> {{ edge[1] }}
+{% endfor %}</code></pre>
+{% endblock %}

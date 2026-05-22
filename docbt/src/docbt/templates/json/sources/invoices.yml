@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: vendor_invoices
+    description: "Synthetic vendor invoices (JSON)"
+    path: "./data/invoices/"
+    file_pattern: "*.json"
+    recursive: true

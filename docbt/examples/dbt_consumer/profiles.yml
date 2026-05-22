@@ -1,0 +1,7 @@
+dbt_consumer:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: ../invoice_pipeline/target/docbt.duckdb
+      schema: dbt_marts

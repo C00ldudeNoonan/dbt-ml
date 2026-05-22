@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: support_tickets
+    description: "Customer support tickets (synthetic JSON)"
+    path: "./data/tickets/"
+    file_pattern: "*.json"
+    recursive: true
+    tags: [raw, support]
+    freshness:
+      warn_after: { count: 6, period: hour }
+      error_after: { count: 24, period: hour }

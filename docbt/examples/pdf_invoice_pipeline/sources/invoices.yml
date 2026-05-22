@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: invoice_pdfs
+    description: "Synthetic invoice PDFs"
+    path: "./data/invoices_pdf/"
+    file_pattern: "*.pdf"
+    recursive: true
+    tags: [raw, pdf]

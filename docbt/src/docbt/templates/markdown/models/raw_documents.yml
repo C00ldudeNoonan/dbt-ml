@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: raw_documents
+    description: "Parse frontmatter + body from each markdown file"
+    source: ref('documents')
+
+    extraction:
+      backend: markdown
+      options:
+        include_body: true
+        compute_word_count: true
+
+    materialization: incremental
+
+    fields:
+      - name: body
+      - name: word_count
+
+    tags: [raw, markdown]
+
+    tests:
+      - not_null: [body]
+      - unique: source_path

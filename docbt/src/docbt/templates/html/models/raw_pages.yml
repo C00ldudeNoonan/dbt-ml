@@ -1,0 +1,28 @@
+version: 2
+
+models:
+  - name: raw_pages
+    description: "Extract body text + OpenGraph from each HTML page"
+    source: ref('pages')
+
+    extraction:
+      backend: html
+      options:
+        include_text: true
+        include_opengraph: true
+        # Adjust selectors for your specific page structure:
+        # selectors:
+        #   title: "h1"
+        #   price: ".price"
+
+    materialization: incremental
+
+    fields:
+      - name: text
+      - name: og
+
+    tags: [raw, html]
+
+    tests:
+      - not_null: [text]
+      - unique: source_path

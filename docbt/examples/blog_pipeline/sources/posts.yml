@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: blog_posts
+    description: "Synthetic markdown blog posts"
+    path: "./data/posts/"
+    file_pattern: "*.md"
+    recursive: true

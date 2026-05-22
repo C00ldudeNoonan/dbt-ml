@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}lineage{% endblock %}
+{% block content %}
+<h1>Lineage</h1>
+
+<h2>Nodes</h2>
+<ul>
+{% for node in dag.nodes %}
+  <li>
+    <span class="kind-{{ node.kind }}">[{{ node.kind }}]</span>
+    {% if node.kind == 'model' %}
+      <a href="model_{{ node.name }}.html">{{ node.name }}</a>
+    {% else %}
+      <code>{{ node.name }}</code>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+
+<h2>Edges</h2>
+<pre><code>graph LR
+{% for edge in dag.edges %}    {{ edge[0] }} --> {{ edge[1] }}
+{% endfor %}</code></pre>
+
+<p class="muted">
+  Paste the block above into any Mermaid renderer (e.g.
+  <a href="https://mermaid.live">mermaid.live</a>) to visualize.
+</p>
+{% endblock %}

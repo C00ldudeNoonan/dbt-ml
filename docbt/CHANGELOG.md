@@ -1,0 +1,46 @@
+# Changelog
+
+## v0.1.0 (unreleased)
+
+Initial public preview.
+
+### Backends
+- `json` — project keys from JSON objects (deterministic, no API)
+- `markdown` — frontmatter + body + word count
+- `pdf` — text extraction via pypdf, with empty-text warnings for scanned PDFs
+- `html` — body text, CSS selectors, OpenGraph, meta tags via BeautifulSoup
+- `llm` — Claude-backed structured extraction with response caching
+
+### Pipeline mechanics
+- Declarative YAML: project, sources, extraction models, transform models
+- DAG via `graphlib`, `ref()` syntax, cycle detection
+- Incremental materialization keyed on content + code version
+- `full` / `incremental` materialization
+- `target/manifest.json` and `target/run_results.json` artifacts on every run
+
+### CLI
+- `init` (with `--template {json,pdf,markdown,html}`)
+- `seed`, `compile`, `graph`, `run` (with `--full-refresh`), `test`, `show`, `clean`
+- `source freshness` — mtime-vs-threshold check
+- `emit-dbt-sources` — write dbt-compatible `sources.yml`
+
+### Selection + filtering
+- `--select` / `--exclude` with dbt-shaped syntax: name, `name+`, `+name`, `+name+`
+- `tag:` prefix for tag-based selection
+- `tags:` on models and sources
+
+### Testing
+- Built-in: `not_null`, `unique`, `min_rows`, `not_empty`
+- Severity: `severity: warn` downgrades fail → warn (exit 0)
+- Custom Python tests: drop `tests/<module>.py` with `run(con, table_ref) -> str | None`
+
+### Profiles
+- dbt-shaped `profiles.yml` with per-target warehouse + llm config
+- Lookup: `--profiles-dir` → `$DOCBT_PROFILES_DIR` → `<project>/profiles.yml` → `~/.docbt/profiles.yml`
+- `--target` flag selects within active profile
+- LLM cache and model id come from profile, with per-model overrides
+
+### Composition
+- `docbt emit-dbt-sources` writes dbt-compatible `sources.yml` so a
+  `dbt-duckdb` project can `{{ source(...) }}` docbt-materialized tables in the same DuckDB file
+- Worked example in `examples/dbt_consumer/` (verified end-to-end with `dbt build`)

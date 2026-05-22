@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: raw_pdf_text
+    description: "Extract raw text + page count from invoice PDFs"
+    source: ref('invoice_pdfs')
+
+    extraction:
+      backend: pdf
+      options:
+        include_text: true
+        include_page_count: true
+
+    materialization: incremental
+
+    fields:
+      - name: text
+      - name: page_count
+
+    tags: [raw, pdf]
+
+    tests:
+      - not_null: [text]
+      - unique: source_path

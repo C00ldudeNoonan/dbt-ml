@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: monthly_totals
+    description: "Per-month invoice volume and spend"
+    depends_on:
+      - ref('raw_invoices')
+
+    transform:
+      type: python
+      module: transforms.monthly_totals
+
+    materialization: full
+    tags: [agg, invoices, monthly]
+
+    fields:
+      - name: month
+        description: "First-of-month timestamp (YYYY-MM-01)"
+      - name: invoice_count
+      - name: total_spend
+
+    tests:
+      - not_null: [month, invoice_count, total_spend]
+      - unique: month
+      - min_rows: 1

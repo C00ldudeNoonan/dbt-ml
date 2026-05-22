@@ -1,0 +1,8 @@
+__PROJECT_NAME__:
+  target: dev
+  outputs:
+    dev:
+      warehouse:
+        type: duckdb
+        path: ./target/docbt.duckdb
+        schema: __PROJECT_NAME__

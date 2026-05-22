@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: documents
+    description: "Markdown documents (point me at your folder)"
+    path: "./data/docs/"
+    file_pattern: "*.md"
+    recursive: true

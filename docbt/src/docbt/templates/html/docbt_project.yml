@@ -1,0 +1,11 @@
+name: __PROJECT_NAME__
+version: "0.1.0"
+profile: __PROJECT_NAME__
+
+extraction:
+  default_backend: html
+
+source-paths: ["sources"]
+model-paths: ["models"]
+transform-paths: ["transforms"]
+target-path: "target"

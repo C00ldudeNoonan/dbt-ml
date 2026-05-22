@@ -1,0 +1,44 @@
+version: 2
+
+models:
+  - name: raw_tickets
+    description: "Typed table of support tickets, one row per ticket"
+    source: ref('support_tickets')
+
+    extraction:
+      backend: json
+      options:
+        fields:
+          - ticket_id
+          - product
+          - priority
+          - status
+          - customer_tier
+          - assigned_team
+          - customer_name
+          - customer_email
+          - summary
+          - created_at
+          - first_response_at
+          - resolved_at
+          - sla_target_hours
+
+    materialization: incremental
+
+    fields:
+      - name: ticket_id
+      - name: product
+      - name: priority
+      - name: status
+      - name: customer_tier
+      - name: assigned_team
+      - name: created_at
+      - name: first_response_at
+      - name: resolved_at
+      - name: sla_target_hours
+
+    tags: [raw, tickets]
+
+    tests:
+      - not_null: [ticket_id, priority, status, created_at]
+      - unique: ticket_id

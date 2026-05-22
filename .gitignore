@@ -1,0 +1,22 @@
+# repo-root catch-alls — package-level gitignores under docbt/ are more thorough
+
+# database files (never commit these anywhere)
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# python detritus
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# local-only Claude session artifacts (don't ignore .claude/settings.json itself)
+.claude/sessions/
+.claude/cache/
