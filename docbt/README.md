@@ -1,16 +1,37 @@
 # docbt
 
 **dbt for unstructured data.** Declarative YAML pipelines that turn folders of
-documents — PDFs, markdown, HTML, JSON, free-form text — into DuckDB tables.
-Incremental processing, schema tests, dbt-style selectors, profiles, and a
-manifest artifact you can wire into other tools.
+documents — PDFs, markdown, HTML, JSON, email, free-form text — into warehouse
+tables. Incremental processing, schema tests, dbt-style selectors, profiles,
+and a manifest artifact you can wire into other tools.
 
-This is the v1 PoC: pure Python, DuckDB-only warehouse. The full Rust+Python
-plan lives in `docbt-core-implementation-plan.md` and is deferred to v2.
+This is the v0.1 PoC: pure Python, DuckDB warehouse. **v0.2 is in scope** —
+adding RAG support (chunking, embeddings, vector storage via LanceDB) and a
+warehouse adapter pattern aimed at the dbt-core set (Postgres, Snowflake,
+BigQuery, Databricks, …). The full Rust+Python design lives in
+`docbt-core-implementation-plan.md` and is deferred to a later v2.
+
+## Where docbt fits
+
+The 2026 landscape for unstructured document pipelines has two stable poles:
+
+- **Managed RAG-as-a-Service** (Vectara, Bedrock Knowledge Bases, Vertex AI
+  Search, Snowflake Cortex Search, Glean) — best when time-to-value matters
+  and the team can't dedicate ML engineers.
+- **Compose best-of-breed Python components** (LlamaParse → contextual
+  chunking → Voyage embeddings → Qdrant → Cohere Rerank → Ragas) — best when
+  retrieval quality, multi-tenant isolation, or unusual document types
+  matter and you have ≥2 ML engineers.
+
+docbt is the **opinionated, declarative path through the second lane**.
+Where LlamaIndex is imperative Python, docbt is YAML + a manifest + tests +
+lineage. Where Snowflake Cortex Search hides everything, docbt makes every
+stage inspectable and reproducible. It's *dbt-shaped*: the same DAG +
+selectors + tests + artifacts pattern, applied to unstructured data.
 
 ---
 
-## You have a folder of files. Get them into DuckDB.
+## You have a folder of files. Get them into your warehouse.
 
 ```bash
 # Install (once it's published; today: clone and `uv sync`)
@@ -228,12 +249,32 @@ src/docbt/
 └── templates/             # init scaffolds for {json,pdf,markdown,html}
 ```
 
-## What's deferred to v2
+## Roadmap
 
-- Rust CLI + PyO3 bridge — replace the Python CLI once the model is validated.
-- Real OCR backend for scanned PDFs (Docling, Marker).
-- Metaxy integration — replace `state.py` with `MetadataStore`.
+**v0.2 — RAG + warehouse adapter pattern.** Tracked in GitHub issues
+tagged `roadmap`. The four headline pieces:
+
+1. **Warehouse adapter pattern** matching dbt-core's set. v0.2 starts with
+   DuckDB (current) + LanceDB (lakehouse-style vector store); subsequent
+   versions add Postgres, then Snowflake / BigQuery / Databricks / Redshift.
+2. **Chunking primitives** as a first-class model kind: recursive (default),
+   token-aware, layout-aware, optional Anthropic Contextual Retrieval
+   (49–67% retrieval failure reduction per published numbers).
+3. **Embedding primitives** as a first-class model kind: Voyage, Cohere,
+   OpenAI, and local sentence-transformers providers. Same cache mechanic
+   as today's LLM backend so re-runs are free.
+4. **Layout-aware OSS parsers** as additional backends: Docling (privacy +
+   table quality), Marker (best OSS layout fidelity).
+
+**Deferred beyond v0.2:**
+
+- Rust CLI + PyO3 bridge.
+- Metaxy integration (replace `state.py` with `MetadataStore`).
 - Field-level lineage (`version_from: [ref('x').field_a]`).
-- Parallel model execution (today's `--threads` parallelizes within a single model).
-- Multi-warehouse adapters (Snowflake, Postgres).
-- Multi-LLM-provider adapters (Bedrock, Vertex, OpenAI).
+- Parallel *model* execution (today's `--threads` parallelizes within a model).
+- Managed parser backends (Reducto, Mistral OCR 3, LlamaParse) — generic
+  remote-parser adapter pattern when there's a real ask.
+- Reranker hooks (Cohere Rerank, Voyage Rerank).
+- Multi-LLM-provider adapters (Bedrock, Vertex, OpenAI structured output).
+- PII detection / redaction (Microsoft Presidio).
+- Ragas integration (`docbt eval`).
