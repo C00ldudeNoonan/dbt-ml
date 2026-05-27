@@ -20,3 +20,8 @@ __pycache__/
 # local-only Claude session artifacts (don't ignore .claude/settings.json itself)
 .claude/sessions/
 .claude/cache/
+
+# private working notes — never commit, never share
+docs/research/
+docs/private/
+**/_scratch/
