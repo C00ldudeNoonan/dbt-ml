@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import polars as pl
 
+from .adapters import WarehouseAdapter, create_adapter
 from .backends import ExtractionResult, get_backend
 from .config import load_project
 from .config.model import ModelConfig
@@ -17,7 +17,6 @@ from .config.project import ProjectConfig
 from .config.source import SourceConfig
 from .dag import ProjectDAG, parse_ref
 from .profile import ResolvedProfile, resolve_llm_options, resolve_profile
-from .state import State
 from .transforms import load_transform
 from .versioning import (
     compute_code_version,
@@ -73,10 +72,9 @@ def run_project(
         s.name: _discover_source(s, project_dir) for s in sources
     }
 
-    db_path = (project_dir / resolved.warehouse.path).resolve()
     results: list[ModelRunResult] = []
 
-    with State(db_path, schema=resolved.warehouse.schema_name) as state:
+    with create_adapter(resolved.warehouse, project_dir=project_dir) as adapter:
         for name in selected:
             model = next(m for m in models if m.name == name)
             result = _run_model(
@@ -84,7 +82,7 @@ def run_project(
                 project=project,
                 project_dir=project_dir,
                 source_docs=source_docs,
-                state=state,
+                adapter=adapter,
                 resolved=resolved,
                 full_refresh=full_refresh,
                 threads=threads,
@@ -121,7 +119,7 @@ def _run_model(
     project: ProjectConfig,
     project_dir: Path,
     source_docs: dict[str, list[DocumentRef]],
-    state: State,
+    adapter: WarehouseAdapter,
     resolved: ResolvedProfile,
     full_refresh: bool,
     threads: int = 1,
@@ -133,7 +131,7 @@ def _run_model(
             project=project,
             project_dir=project_dir,
             source_docs=source_docs,
-            state=state,
+            adapter=adapter,
             resolved=resolved,
             full_refresh=full_refresh,
             threads=threads,
@@ -142,7 +140,7 @@ def _run_model(
         result = _run_transform_model(
             model=model,
             project_dir=project_dir,
-            state=state,
+            adapter=adapter,
             resolved=resolved,
         )
     else:
@@ -159,7 +157,7 @@ def _run_extraction_model(
     project: ProjectConfig,
     project_dir: Path,
     source_docs: dict[str, list[DocumentRef]],
-    state: State,
+    adapter: WarehouseAdapter,
     resolved: ResolvedProfile,
     full_refresh: bool,
     threads: int = 1,
@@ -187,7 +185,7 @@ def _run_extraction_model(
     )
 
     is_incremental = model.materialization == "incremental" and not full_refresh
-    processed_state = state.get_processed(model.name) if is_incremental else {}
+    processed_state = adapter.fetch_state(model.name) if is_incremental else {}
 
     docs_to_process: list[DocumentRef] = []
     for doc in docs:
@@ -223,18 +221,17 @@ def _run_extraction_model(
 
     rows_written = 0
     if rows or full_refresh or model.materialization == "full":
-        rows_written = _materialize_extraction(
-            con=state.connection,
-            schema_ref=state.schema_ref,
-            table=model.name,
-            rows=rows,
-            materialization=model.materialization,
-            full_refresh=full_refresh,
-        )
+        df = pl.DataFrame(rows) if rows else pl.DataFrame()
+        if model.materialization == "full" or full_refresh:
+            rows_written = adapter.materialize_full(model.name, df)
+        else:
+            rows_written = adapter.materialize_incremental(
+                model.name, df, key_col="document_id"
+            )
 
     if full_refresh:
-        state.clear_model(model.name)
-    state.upsert_processed(model.name, state_records)
+        adapter.clear_model_state(model.name)
+    adapter.upsert_state(model.name, state_records)
 
     return ModelRunResult(
         model_name=model.name,
@@ -269,49 +266,11 @@ def _scalarize(value: Any) -> Any:
     return value
 
 
-def _materialize_extraction(
-    *,
-    con: duckdb.DuckDBPyConnection,
-    schema_ref: str,
-    table: str,
-    rows: list[dict[str, Any]],
-    materialization: str,
-    full_refresh: bool,
-) -> int:
-    full_name = f"{schema_ref}.{table}"
-
-    if not rows and materialization == "incremental" and not full_refresh:
-        return 0
-
-    df = pl.DataFrame(rows) if rows else pl.DataFrame()
-    con.register("docbt_staging", df)
-    try:
-        if materialization == "full" or full_refresh:
-            con.execute(f"CREATE OR REPLACE TABLE {full_name} AS SELECT * FROM docbt_staging")
-        else:
-            con.execute(
-                f"CREATE TABLE IF NOT EXISTS {full_name} AS "
-                f"SELECT * FROM docbt_staging LIMIT 0"
-            )
-            ids = df["document_id"].to_list() if "document_id" in df.columns else []
-            if ids:
-                placeholders = ",".join(["?"] * len(ids))
-                con.execute(
-                    f"DELETE FROM {full_name} WHERE document_id IN ({placeholders})",
-                    ids,
-                )
-            con.execute(f"INSERT INTO {full_name} SELECT * FROM docbt_staging")
-    finally:
-        con.unregister("docbt_staging")
-
-    return df.height
-
-
 def _run_transform_model(
     *,
     model: ModelConfig,
     project_dir: Path,
-    state: State,
+    adapter: WarehouseAdapter,
     resolved: ResolvedProfile,
 ) -> ModelRunResult:
     assert model.transform is not None
@@ -334,9 +293,9 @@ def _run_transform_model(
     deps: dict[str, pl.DataFrame] = {}
     for dep_ref in model.depends_on:
         dep_name = parse_ref(dep_ref)
-        deps[dep_name] = state.connection.execute(
-            f"SELECT * FROM {state.schema_ref}.{dep_name}"
-        ).pl()
+        deps[dep_name] = adapter.query_df(
+            f"SELECT * FROM {adapter.table_ref(dep_name)}"
+        )
 
     sig = inspect.signature(transform_fn)
     if len(sig.parameters) >= 2:
@@ -356,14 +315,7 @@ def _run_transform_model(
             f"Transform '{model.transform.module}' must return a polars.DataFrame"
         )
 
-    full_name = f"{state.schema_ref}.{model.name}"
-    state.connection.register("docbt_staging", output)
-    try:
-        state.connection.execute(
-            f"CREATE OR REPLACE TABLE {full_name} AS SELECT * FROM docbt_staging"
-        )
-    finally:
-        state.connection.unregister("docbt_staging")
+    adapter.materialize_full(model.name, output)
 
     return ModelRunResult(
         model_name=model.name,
@@ -378,13 +330,11 @@ def clean_project(
     *,
     target: str | None = None,
     profiles_dir: Path | None = None,
-) -> Path:
-    """Delete the DuckDB output file. Returns the path that was removed."""
+) -> str:
+    """Delegate to the adapter's clean(). Returns a description of what was removed."""
     project, _, _ = load_project(project_dir)
     resolved = resolve_profile(
         project, project_dir, target=target, profiles_dir=profiles_dir
     )
-    db_path = (project_dir / resolved.warehouse.path).resolve()
-    if db_path.exists():
-        db_path.unlink()
-    return db_path
+    adapter = create_adapter(resolved.warehouse, project_dir=project_dir)
+    return adapter.clean()

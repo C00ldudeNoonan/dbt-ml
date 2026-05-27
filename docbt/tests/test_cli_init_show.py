@@ -104,7 +104,7 @@ def test_show_missing_db(tmp_path: Path, example_project_dir: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["--project-dir", str(dst), "show", "raw_invoices"])
     assert result.exit_code != 0
-    assert "No database" in result.output
+    assert "Run `docbt run`" in result.output
 
 
 def test_show_unknown_model(tmp_path: Path, example_project_dir: Path) -> None:
@@ -122,4 +122,4 @@ def test_show_unknown_model(tmp_path: Path, example_project_dir: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["--project-dir", str(dst), "show", "no_such_model"])
     assert result.exit_code != 0
-    assert "Could not query" in result.output
+    assert "not found" in result.output

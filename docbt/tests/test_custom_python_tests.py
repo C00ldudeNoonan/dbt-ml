@@ -1,20 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
-import duckdb
+import polars as pl
 import pytest
 
+from docbt.adapters import WarehouseAdapter, create_adapter
 from docbt.checks.schema import evaluate_test_spec
+from docbt.config.profile import WarehouseConfig
 
 
 @pytest.fixture
-def db(tmp_path: Path) -> duckdb.DuckDBPyConnection:
-    con = duckdb.connect(str(tmp_path / "t.duckdb"))
-    con.execute("CREATE TABLE items (id INTEGER, total DOUBLE)")
-    con.execute("INSERT INTO items VALUES (1, 100.0), (2, 200.0), (3, -5.0)")
-    yield con
-    con.close()
+def db(tmp_path: Path) -> Iterator[WarehouseAdapter]:
+    """Adapter with an `items` table — passed to custom Python tests as `con`
+    via the adapter's `raw_connection`."""
+    cfg = WarehouseConfig.model_validate(
+        {"type": "duckdb", "path": str(tmp_path / "t.duckdb"), "schema": "main"}
+    )
+    with create_adapter(cfg) as adapter:
+        adapter.materialize_full(
+            "items",
+            pl.DataFrame({"id": [1, 2, 3], "total": [100.0, 200.0, -5.0]}),
+        )
+        yield adapter
 
 
 def _write_test_module(project_dir: Path, name: str, body: str) -> None:
@@ -23,7 +32,7 @@ def _write_test_module(project_dir: Path, name: str, body: str) -> None:
     (tests_dir / f"{name}.py").write_text(body)
 
 
-def test_python_test_pass(tmp_path: Path, db: duckdb.DuckDBPyConnection) -> None:
+def test_python_test_pass(tmp_path: Path, db: WarehouseAdapter) -> None:
     _write_test_module(
         tmp_path,
         "all_positive",
@@ -34,17 +43,16 @@ def test_python_test_pass(tmp_path: Path, db: duckdb.DuckDBPyConnection) -> None
     results = evaluate_test_spec(
         {"python": "tests.all_positive"},
         model_name="items",
-        table_ref="items",
-        con=db,
+        table_ref=db.table_ref("items"),
+        adapter=db,
         project_dir=tmp_path,
     )
-    # items table has one negative row → fail
     assert results[0].status == "fail"
     assert "1 rows with negative" in results[0].message
 
 
 def test_python_test_pass_when_no_failures(
-    tmp_path: Path, db: duckdb.DuckDBPyConnection
+    tmp_path: Path, db: WarehouseAdapter
 ) -> None:
     _write_test_module(
         tmp_path,
@@ -55,15 +63,15 @@ def test_python_test_pass_when_no_failures(
     results = evaluate_test_spec(
         {"python": "tests.row_count_ok"},
         model_name="items",
-        table_ref="items",
-        con=db,
+        table_ref=db.table_ref("items"),
+        adapter=db,
         project_dir=tmp_path,
     )
     assert results[0].status == "pass"
 
 
 def test_python_test_with_severity_warn(
-    tmp_path: Path, db: duckdb.DuckDBPyConnection
+    tmp_path: Path, db: WarehouseAdapter
 ) -> None:
     _write_test_module(
         tmp_path,
@@ -73,8 +81,8 @@ def test_python_test_with_severity_warn(
     results = evaluate_test_spec(
         {"python": "tests.fails_always", "severity": "warn"},
         model_name="items",
-        table_ref="items",
-        con=db,
+        table_ref=db.table_ref("items"),
+        adapter=db,
         project_dir=tmp_path,
     )
     assert results[0].status == "warn"
@@ -82,13 +90,13 @@ def test_python_test_with_severity_warn(
 
 
 def test_python_test_missing_module(
-    tmp_path: Path, db: duckdb.DuckDBPyConnection
+    tmp_path: Path, db: WarehouseAdapter
 ) -> None:
     results = evaluate_test_spec(
         {"python": "tests.nonexistent"},
         model_name="items",
-        table_ref="items",
-        con=db,
+        table_ref=db.table_ref("items"),
+        adapter=db,
         project_dir=tmp_path,
     )
     assert results[0].status == "fail"
@@ -96,7 +104,7 @@ def test_python_test_missing_module(
 
 
 def test_python_test_missing_run_function(
-    tmp_path: Path, db: duckdb.DuckDBPyConnection
+    tmp_path: Path, db: WarehouseAdapter
 ) -> None:
     _write_test_module(
         tmp_path,
@@ -106,8 +114,8 @@ def test_python_test_missing_run_function(
     results = evaluate_test_spec(
         {"python": "tests.no_run"},
         model_name="items",
-        table_ref="items",
-        con=db,
+        table_ref=db.table_ref("items"),
+        adapter=db,
         project_dir=tmp_path,
     )
     assert results[0].status == "fail"
