@@ -7,11 +7,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class WarehouseConfig(BaseModel):
-    """Where docbt writes materialized tables. Currently only DuckDB."""
+    """Where docbt writes materialized tables. Adapter chosen by `type:`.
+
+    v0.2: `duckdb` (current default), `lancedb` (incoming).
+    v0.3+: `postgres`, `snowflake`, `bigquery`, `databricks`, `redshift`.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    type: Literal["duckdb"] = "duckdb"
+    type: str = "duckdb"
     path: Path
     schema_name: str = Field(default="docbt", alias="schema")
 

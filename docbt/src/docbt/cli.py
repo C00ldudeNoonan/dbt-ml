@@ -5,8 +5,8 @@ import shutil
 from pathlib import Path
 
 import click
-import duckdb
 
+from .adapters import AdapterError, create_adapter
 from .checks import run_project_tests
 from .config import ConfigError, load_project
 from .config.model import ModelConfig
@@ -205,25 +205,19 @@ def show(ctx: click.Context, model_name: str, limit: int) -> None:
     except ProfileError as e:
         raise click.ClickException(str(e)) from e
 
-    db_path = (project_dir / resolved.warehouse.path).resolve()
-    if not db_path.exists():
-        raise click.ClickException(
-            f"No database at {db_path}. Run `docbt run` first."
-        )
-
-    con = duckdb.connect(str(db_path), read_only=True)
     try:
-        catalog_row = con.execute("SELECT current_database()").fetchone()
-        catalog = catalog_row[0] if catalog_row else "memory"
-        schema_ref = f'"{catalog}"."{resolved.warehouse.schema_name}"'
-        try:
-            df = con.execute(
-                f"SELECT * FROM {schema_ref}.{model_name} LIMIT {limit}"
-            ).pl()
-        except duckdb.Error as e:
-            raise click.ClickException(f"Could not query {model_name}: {e}") from e
-    finally:
-        con.close()
+        with create_adapter(resolved.warehouse, project_dir=project_dir) as adapter:
+            tables = adapter.list_tables()
+            if model_name not in tables:
+                raise click.ClickException(
+                    f"Table '{model_name}' not found in {adapter.schema_ref}. "
+                    f"Run `docbt run` first. Available: {tables or '(none)'}"
+                )
+            df = adapter.query_df(
+                f"SELECT * FROM {adapter.table_ref(model_name)} LIMIT {limit}"
+            )
+    except AdapterError as e:
+        raise click.ClickException(str(e)) from e
 
     click.echo(df)
 

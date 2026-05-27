@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..adapters import WarehouseAdapter, create_adapter
 from ..config import load_project
 from ..config.model import ModelConfig
 from ..dag import ProjectDAG
 from ..profile import resolve_profile
-from ..state import State
 from .schema import TestResult, UnknownTestError, evaluate_test_spec
 
 
@@ -25,22 +25,24 @@ def run_project_tests(
     dag = ProjectDAG(sources, models)
     selected_names = set(dag.select_models(select=select, exclude=exclude))
 
-    db_path = (project_dir / resolved.warehouse.path).resolve()
     results: list[TestResult] = []
-    with State(db_path, schema=resolved.warehouse.schema_name) as state:
+    with create_adapter(resolved.warehouse, project_dir=project_dir) as adapter:
         for model in models:
             if model.name not in selected_names:
                 continue
             if not model.tests:
                 continue
-            results.extend(run_model_tests(model, state, project_dir=project_dir))
+            results.extend(run_model_tests(model, adapter, project_dir=project_dir))
     return results
 
 
 def run_model_tests(
-    model: ModelConfig, state: State, *, project_dir: Path | None = None
+    model: ModelConfig,
+    adapter: WarehouseAdapter,
+    *,
+    project_dir: Path | None = None,
 ) -> list[TestResult]:
-    table_ref = f"{state.schema_ref}.{model.name}"
+    table_ref = adapter.table_ref(model.name)
     out: list[TestResult] = []
     for spec in model.tests:
         try:
@@ -49,7 +51,7 @@ def run_model_tests(
                     spec,
                     model_name=model.name,
                     table_ref=table_ref,
-                    con=state.connection,
+                    adapter=adapter,
                     project_dir=project_dir,
                 )
             )

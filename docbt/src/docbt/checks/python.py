@@ -1,5 +1,11 @@
 """Custom Python tests: user-supplied modules that return None (pass) or a
-failure message string (fail)."""
+failure message string (fail).
+
+User contract is `def run(con, table_ref) -> str | None`, where `con` is the
+underlying warehouse connection (e.g. duckdb.DuckDBPyConnection). For
+DuckDB this is `adapter.connection`. Other adapters expose their own
+raw connection via `adapter.raw_connection`.
+"""
 from __future__ import annotations
 
 import importlib.util
@@ -7,8 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import duckdb
-
+from ..adapters import WarehouseAdapter
 from ..versioning import resolve_module_file
 
 
@@ -19,7 +24,7 @@ class CustomTestError(Exception):
 def run_python_test(
     module_path: str,
     project_dir: Path,
-    con: duckdb.DuckDBPyConnection,
+    adapter: WarehouseAdapter,
     table_ref: str,
 ) -> str | None:
     """Load `module_path` and call its `run(con, table_ref)`.
@@ -44,6 +49,12 @@ def run_python_test(
             f"Custom test '{module_path}' must define `run(con, table_ref) -> str | None`"
         )
 
+    # Hand the underlying warehouse connection to the user-supplied function.
+    con = getattr(adapter, "raw_connection", None)
+    if con is None:
+        # Adapter doesn't expose a raw connection — pass the adapter itself
+        # and let the user's test work against its public API.
+        con = adapter
     result = run_fn(con, table_ref)
     if result is None:
         return None

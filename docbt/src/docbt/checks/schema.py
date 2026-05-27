@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import duckdb
-
+from ..adapters import WarehouseAdapter
 from .python import CustomTestError, run_python_test
 
 SUPPORTED_TESTS = {"not_null", "unique", "min_rows", "not_empty", "python"}
@@ -42,7 +41,7 @@ def evaluate_test_spec(
     *,
     model_name: str,
     table_ref: str,
-    con: duckdb.DuckDBPyConnection,
+    adapter: WarehouseAdapter,
     project_dir: Path | None = None,
 ) -> list[TestResult]:
     """Parse one test spec and run it.
@@ -55,7 +54,7 @@ def evaluate_test_spec(
     """
     if isinstance(spec, str):
         return _apply_severity(
-            _run_named_test(spec, None, model_name, table_ref, con, project_dir),
+            _run_named_test(spec, None, model_name, table_ref, adapter, project_dir),
             "error",
         )
     if isinstance(spec, dict):
@@ -71,7 +70,7 @@ def evaluate_test_spec(
             )
         ((test_name, arg),) = body.items()
         return _apply_severity(
-            _run_named_test(test_name, arg, model_name, table_ref, con, project_dir),
+            _run_named_test(test_name, arg, model_name, table_ref, adapter, project_dir),
             severity,
         )
     raise UnknownTestError(f"Unsupported test spec: {spec!r}")
@@ -101,24 +100,24 @@ def _run_named_test(
     arg: Any,
     model_name: str,
     table_ref: str,
-    con: duckdb.DuckDBPyConnection,
+    adapter: WarehouseAdapter,
     project_dir: Path | None,
 ) -> list[TestResult]:
     if test_name == "not_null":
-        return _not_null(model_name, table_ref, con, arg)
+        return _not_null(model_name, table_ref, adapter, arg)
     if test_name == "unique":
-        return [_unique(model_name, table_ref, con, arg)]
+        return [_unique(model_name, table_ref, adapter, arg)]
     if test_name == "min_rows":
-        return [_min_rows(model_name, table_ref, con, int(arg))]
+        return [_min_rows(model_name, table_ref, adapter, int(arg))]
     if test_name == "not_empty":
-        return [_min_rows(model_name, table_ref, con, 1, display_as="not_empty")]
+        return [_min_rows(model_name, table_ref, adapter, 1, display_as="not_empty")]
     if test_name == "python":
         if project_dir is None:
             raise UnknownTestError(
                 "Custom python test requires the test runner to know project_dir; "
                 "this usually means you're calling evaluate_test_spec directly without it."
             )
-        return [_python(model_name, table_ref, con, str(arg), project_dir)]
+        return [_python(model_name, table_ref, adapter, str(arg), project_dir)]
     raise UnknownTestError(
         f"Unknown test '{test_name}'. Supported: {sorted(SUPPORTED_TESTS)}"
     )
@@ -127,16 +126,15 @@ def _run_named_test(
 def _not_null(
     model_name: str,
     table_ref: str,
-    con: duckdb.DuckDBPyConnection,
+    adapter: WarehouseAdapter,
     arg: Any,
 ) -> list[TestResult]:
     cols = arg if isinstance(arg, list) else [arg]
     results: list[TestResult] = []
     for col in cols:
-        row = con.execute(
+        count = adapter.scalar(
             f'SELECT COUNT(*) FROM {table_ref} WHERE "{col}" IS NULL'
-        ).fetchone()
-        count = row[0] if row else 0
+        ) or 0
         results.append(
             TestResult(
                 test_name="not_null",
@@ -152,18 +150,17 @@ def _not_null(
 def _unique(
     model_name: str,
     table_ref: str,
-    con: duckdb.DuckDBPyConnection,
+    adapter: WarehouseAdapter,
     arg: Any,
 ) -> TestResult:
     cols = arg if isinstance(arg, list) else [arg]
     col_list = ", ".join(f'"{c}"' for c in cols)
-    row = con.execute(
+    count = adapter.scalar(
         f"SELECT COUNT(*) FROM ("
         f"  SELECT {col_list} FROM {table_ref}"
         f"  GROUP BY {col_list} HAVING COUNT(*) > 1"
         f")"
-    ).fetchone()
-    count = row[0] if row else 0
+    ) or 0
     return TestResult(
         test_name="unique",
         model_name=model_name,
@@ -176,12 +173,12 @@ def _unique(
 def _python(
     model_name: str,
     table_ref: str,
-    con: duckdb.DuckDBPyConnection,
+    adapter: WarehouseAdapter,
     module_path: str,
     project_dir: Path,
 ) -> TestResult:
     try:
-        message = run_python_test(module_path, project_dir, con, table_ref)
+        message = run_python_test(module_path, project_dir, adapter, table_ref)
     except CustomTestError as e:
         return TestResult(
             test_name=f"python:{module_path}",
@@ -202,13 +199,12 @@ def _python(
 def _min_rows(
     model_name: str,
     table_ref: str,
-    con: duckdb.DuckDBPyConnection,
+    adapter: WarehouseAdapter,
     n: int,
     *,
     display_as: str = "min_rows",
 ) -> TestResult:
-    row = con.execute(f"SELECT COUNT(*) FROM {table_ref}").fetchone()
-    actual = row[0] if row else 0
+    actual = adapter.scalar(f"SELECT COUNT(*) FROM {table_ref}") or 0
     return TestResult(
         test_name=display_as,
         model_name=model_name,

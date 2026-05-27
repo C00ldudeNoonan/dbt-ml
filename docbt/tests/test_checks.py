@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
-import duckdb
+import polars as pl
 import pytest
 
+from docbt.adapters import WarehouseAdapter, create_adapter
 from docbt.checks import run_project_tests
 from docbt.checks.schema import TestResult, UnknownTestError, evaluate_test_spec
+from docbt.config.profile import WarehouseConfig
 from docbt.runner import run_project
 from docbt.synth import generate_invoices
 
@@ -24,16 +27,23 @@ def fresh_project(tmp_path: Path, example_project_dir: Path) -> Path:
 
 
 @pytest.fixture
-def populated_db(tmp_path: Path) -> duckdb.DuckDBPyConnection:
-    db = tmp_path / "t.duckdb"
-    con = duckdb.connect(str(db))
-    con.execute("CREATE TABLE items (id INTEGER, vendor VARCHAR, total DOUBLE)")
-    con.execute(
-        "INSERT INTO items VALUES "
-        "(1, 'A', 10.0), (2, 'B', 20.0), (3, 'C', NULL), (3, 'D', 30.0)"
+def populated_db(tmp_path: Path) -> Iterator[WarehouseAdapter]:
+    """Adapter with a small `items` table — used to exercise schema tests."""
+    cfg = WarehouseConfig.model_validate(
+        {"type": "duckdb", "path": str(tmp_path / "t.duckdb"), "schema": "main"}
     )
-    yield con
-    con.close()
+    with create_adapter(cfg) as adapter:
+        adapter.materialize_full(
+            "items",
+            pl.DataFrame(
+                {
+                    "id": [1, 2, 3, 3],
+                    "vendor": ["A", "B", "C", "D"],
+                    "total": [10.0, 20.0, None, 30.0],
+                }
+            ),
+        )
+        yield adapter
 
 
 def _by(results: list[TestResult], **filters: str | None) -> TestResult:
@@ -44,77 +54,79 @@ def _by(results: list[TestResult], **filters: str | None) -> TestResult:
     )
 
 
-def test_not_null_pass_and_fail(populated_db: duckdb.DuckDBPyConnection) -> None:
+def test_not_null_pass_and_fail(populated_db: WarehouseAdapter) -> None:
     results = evaluate_test_spec(
         {"not_null": ["id", "total"]},
         model_name="items",
-        table_ref="items",
-        con=populated_db,
+        table_ref=populated_db.table_ref("items"),
+        adapter=populated_db,
     )
     assert _by(results, column="id").passed
     assert not _by(results, column="total").passed
     assert "1 rows" in _by(results, column="total").message
 
 
-def test_unique_detects_dups(populated_db: duckdb.DuckDBPyConnection) -> None:
+def test_unique_detects_dups(populated_db: WarehouseAdapter) -> None:
     results = evaluate_test_spec(
         {"unique": "id"},
         model_name="items",
-        table_ref="items",
-        con=populated_db,
+        table_ref=populated_db.table_ref("items"),
+        adapter=populated_db,
     )
     assert len(results) == 1
     assert not results[0].passed
 
 
-def test_unique_composite(populated_db: duckdb.DuckDBPyConnection) -> None:
+def test_unique_composite(populated_db: WarehouseAdapter) -> None:
     results = evaluate_test_spec(
         {"unique": ["id", "vendor"]},
         model_name="items",
-        table_ref="items",
-        con=populated_db,
+        table_ref=populated_db.table_ref("items"),
+        adapter=populated_db,
     )
     assert results[0].passed
 
 
-def test_min_rows(populated_db: duckdb.DuckDBPyConnection) -> None:
+def test_min_rows(populated_db: WarehouseAdapter) -> None:
+    ref = populated_db.table_ref("items")
     ok = evaluate_test_spec(
-        {"min_rows": 1}, model_name="items", table_ref="items", con=populated_db
+        {"min_rows": 1}, model_name="items", table_ref=ref, adapter=populated_db
     )
     assert ok[0].passed
     bad = evaluate_test_spec(
-        {"min_rows": 100}, model_name="items", table_ref="items", con=populated_db
+        {"min_rows": 100}, model_name="items", table_ref=ref, adapter=populated_db
     )
     assert not bad[0].passed
 
 
-def test_not_empty_bare_string(populated_db: duckdb.DuckDBPyConnection) -> None:
+def test_not_empty_bare_string(populated_db: WarehouseAdapter) -> None:
+    ref = populated_db.table_ref("items")
     results = evaluate_test_spec(
-        "not_empty", model_name="items", table_ref="items", con=populated_db
+        "not_empty", model_name="items", table_ref=ref, adapter=populated_db
     )
     assert results[0].test_name == "not_empty"
     assert results[0].passed
 
 
-def test_unknown_test_raises(populated_db: duckdb.DuckDBPyConnection) -> None:
+def test_unknown_test_raises(populated_db: WarehouseAdapter) -> None:
     with pytest.raises(UnknownTestError):
         evaluate_test_spec(
             {"nonsense": "foo"},
             model_name="items",
-            table_ref="items",
-            con=populated_db,
+            table_ref=populated_db.table_ref("items"),
+            adapter=populated_db,
         )
 
 
 def test_severity_warn_downgrades_failure(
-    populated_db: duckdb.DuckDBPyConnection,
+    populated_db: WarehouseAdapter,
 ) -> None:
     # `total` has a NULL → would be a "fail" by default
     results = evaluate_test_spec(
         {"not_null": "total", "severity": "warn"},
         model_name="items",
-        table_ref="items",
-        con=populated_db,
+        table_ref=populated_db.table_ref("items"),
+        adapter=populated_db,
     )
     assert results[0].status == "warn"
     assert results[0].severity == "warn"
@@ -122,12 +134,12 @@ def test_severity_warn_downgrades_failure(
     assert not results[0].is_hard_failure
 
 
-def test_severity_error_is_default(populated_db: duckdb.DuckDBPyConnection) -> None:
+def test_severity_error_is_default(populated_db: WarehouseAdapter) -> None:
     results = evaluate_test_spec(
         {"not_null": "total"},
         model_name="items",
-        table_ref="items",
-        con=populated_db,
+        table_ref=populated_db.table_ref("items"),
+        adapter=populated_db,
     )
     assert results[0].status == "fail"
     assert results[0].severity == "error"
@@ -135,25 +147,25 @@ def test_severity_error_is_default(populated_db: duckdb.DuckDBPyConnection) -> N
 
 
 def test_severity_warn_keeps_passing_results(
-    populated_db: duckdb.DuckDBPyConnection,
+    populated_db: WarehouseAdapter,
 ) -> None:
     # Passing test should still report "pass" even with severity: warn
     results = evaluate_test_spec(
         {"not_null": "id", "severity": "warn"},
         model_name="items",
-        table_ref="items",
-        con=populated_db,
+        table_ref=populated_db.table_ref("items"),
+        adapter=populated_db,
     )
     assert results[0].status == "pass"
 
 
-def test_unknown_severity_raises(populated_db: duckdb.DuckDBPyConnection) -> None:
+def test_unknown_severity_raises(populated_db: WarehouseAdapter) -> None:
     with pytest.raises(UnknownTestError, match="Unknown severity"):
         evaluate_test_spec(
             {"not_null": "id", "severity": "loud"},
             model_name="items",
-            table_ref="items",
-            con=populated_db,
+            table_ref=populated_db.table_ref("items"),
+            adapter=populated_db,
         )
 
 

@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import polars as pl
+import pytest
+
+from docbt.adapters import (
+    AdapterError,
+    UnknownAdapterError,
+    create_adapter,
+    list_adapter_types,
+)
+from docbt.config.profile import WarehouseConfig
+
+
+def _wh(path: Path, schema: str = "testns") -> WarehouseConfig:
+    return WarehouseConfig.model_validate(
+        {"type": "duckdb", "path": str(path), "schema": schema}
+    )
+
+
+def test_registered_types() -> None:
+    assert "duckdb" in list_adapter_types()
+
+
+def test_unknown_type_raises(tmp_path: Path) -> None:
+    cfg = WarehouseConfig.model_validate(
+        {"type": "no_such_warehouse", "path": str(tmp_path / "x"), "schema": "s"}
+    )
+    with pytest.raises(UnknownAdapterError):
+        create_adapter(cfg)
+
+
+def test_duckdb_creates_schema_and_state(tmp_path: Path) -> None:
+    cfg = _wh(tmp_path / "t.duckdb")
+    with create_adapter(cfg) as adapter:
+        # state table is in the configured schema
+        cnt = adapter.scalar(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema = 'testns' AND table_name = 'docbt_state'"
+        )
+        assert cnt == 1
+
+
+def test_state_upsert_and_fetch(tmp_path: Path) -> None:
+    with create_adapter(_wh(tmp_path / "t.duckdb")) as adapter:
+        adapter.upsert_state(
+            "m1",
+            [("doc-1", "hash-a", "v1"), ("doc-2", "hash-b", "v1")],
+        )
+        assert adapter.fetch_state("m1") == {
+            "doc-1": ("hash-a", "v1"),
+            "doc-2": ("hash-b", "v1"),
+        }
+        adapter.upsert_state("m1", [("doc-1", "hash-a2", "v2")])
+        s = adapter.fetch_state("m1")
+        assert s["doc-1"] == ("hash-a2", "v2")
+        assert len(s) == 2
+
+
+def test_state_persists_across_sessions(tmp_path: Path) -> None:
+    cfg = _wh(tmp_path / "t.duckdb")
+    with create_adapter(cfg) as adapter:
+        adapter.upsert_state("m1", [("doc-1", "h", "v")])
+    with create_adapter(cfg) as adapter:
+        assert adapter.fetch_state("m1") == {"doc-1": ("h", "v")}
+
+
+def test_clear_model_state(tmp_path: Path) -> None:
+    with create_adapter(_wh(tmp_path / "t.duckdb")) as adapter:
+        adapter.upsert_state("m1", [("doc-1", "h", "v")])
+        adapter.upsert_state("m2", [("doc-1", "h", "v")])
+        adapter.clear_model_state("m1")
+        assert adapter.fetch_state("m1") == {}
+        assert adapter.fetch_state("m2") == {"doc-1": ("h", "v")}
+
+
+def test_catalog_schema_collision(tmp_path: Path) -> None:
+    """Filename matches schema name (both 'docbt') — used to break in v0.1."""
+    with create_adapter(_wh(tmp_path / "docbt.duckdb", schema="docbt")) as adapter:
+        adapter.upsert_state("m1", [("doc-1", "h", "v")])
+        assert adapter.fetch_state("m1") == {"doc-1": ("h", "v")}
+
+
+def test_materialize_full(tmp_path: Path) -> None:
+    df = pl.DataFrame({"document_id": ["a", "b"], "x": [1, 2]})
+    with create_adapter(_wh(tmp_path / "t.duckdb")) as adapter:
+        n = adapter.materialize_full("widgets", df)
+        assert n == 2
+        rows = adapter.rows(
+            f"SELECT document_id, x FROM {adapter.table_ref('widgets')} "
+            "ORDER BY document_id"
+        )
+        assert rows == [("a", 1), ("b", 2)]
+
+
+def test_materialize_incremental_upserts(tmp_path: Path) -> None:
+    cfg = _wh(tmp_path / "t.duckdb")
+    with create_adapter(cfg) as adapter:
+        adapter.materialize_incremental(
+            "widgets",
+            pl.DataFrame({"document_id": ["a", "b"], "x": [1, 2]}),
+            key_col="document_id",
+        )
+        # Re-upsert doc 'a' with a different x; doc 'b' unchanged
+        adapter.materialize_incremental(
+            "widgets",
+            pl.DataFrame({"document_id": ["a"], "x": [99]}),
+            key_col="document_id",
+        )
+        rows = adapter.rows(
+            f"SELECT document_id, x FROM {adapter.table_ref('widgets')} ORDER BY document_id"
+        )
+        assert rows == [("a", 99), ("b", 2)]
+
+
+def test_list_tables_excludes_state(tmp_path: Path) -> None:
+    with create_adapter(_wh(tmp_path / "t.duckdb")) as adapter:
+        adapter.materialize_full(
+            "first", pl.DataFrame({"x": [1]})
+        )
+        adapter.materialize_full(
+            "second", pl.DataFrame({"x": [1]})
+        )
+        names = adapter.list_tables()
+        assert "docbt_state" not in names
+        assert set(names) == {"first", "second"}
+
+
+def test_drop_table(tmp_path: Path) -> None:
+    with create_adapter(_wh(tmp_path / "t.duckdb")) as adapter:
+        adapter.materialize_full("x", pl.DataFrame({"a": [1]}))
+        assert "x" in adapter.list_tables()
+        adapter.drop_table("x")
+        assert "x" not in adapter.list_tables()
+
+
+def test_clean_deletes_duckdb_file(tmp_path: Path) -> None:
+    cfg = _wh(tmp_path / "t.duckdb")
+    with create_adapter(cfg) as adapter:
+        adapter.materialize_full("x", pl.DataFrame({"a": [1]}))
+    adapter2 = create_adapter(cfg)
+    out = adapter2.clean()
+    assert "t.duckdb" in out
+    assert not (tmp_path / "t.duckdb").exists()
+
+
+def test_outside_context_raises(tmp_path: Path) -> None:
+    adapter = create_adapter(_wh(tmp_path / "t.duckdb"))
+    with pytest.raises(AdapterError):
+        adapter.connection  # noqa: B018
