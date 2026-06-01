@@ -153,6 +153,34 @@ my_project:
 Lookup order: `--profiles-dir` flag → `$DOCBT_PROFILES_DIR` →
 `<project>/profiles.yml` → `~/.docbt/profiles.yml`.
 
+## Built-in text preprocessing
+
+Reference any of these as a Python transform module — no project-local code
+needed. Users can override by writing their own `transforms/<name>.py`
+(project-local files win over installed packages).
+
+```yaml
+- name: post_text_stats
+  depends_on: [ref('raw_posts')]
+  transform:
+    type: python
+    module: docbt.text.transforms.text_stats   # built-in, ships with docbt
+    options:
+      text_field: body
+      emit: [word_count, sentence_count]
+```
+
+| Module                                    | What it does                                                                   |
+|-------------------------------------------|--------------------------------------------------------------------------------|
+| `docbt.text.transforms.text_stats`        | Adds `word_count` / `char_count` / `sentence_count` / `paragraph_count`         |
+| `docbt.text.transforms.clean_encoding`    | Fixes mojibake (UTF-8-as-Latin-1 confusion) via ftfy                            |
+| `docbt.text.transforms.detect_language`   | Adds a 2-letter ISO language code per row via langdetect                        |
+| `docbt.text.transforms.count_tokens`      | Adds `token_count` for an OpenAI / Claude-style tokenizer (tiktoken)            |
+| `docbt.text.transforms.find_duplicates`   | Flags near-duplicate rows via MinHash + LSH (Jaccard threshold configurable)    |
+
+All five are pure functions importable via `from docbt.text import …` if you'd
+rather wire them into your own transforms.
+
 ## Tests
 
 ```yaml

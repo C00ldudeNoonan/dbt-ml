@@ -13,6 +13,7 @@ class ExtractionConfig(BaseModel):
 class TransformConfig(BaseModel):
     type: str
     module: str | None = None
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class FieldConfig(BaseModel):
