@@ -177,9 +177,19 @@ needed. Users can override by writing their own `transforms/<name>.py`
 | `docbt.text.transforms.detect_language`   | Adds a 2-letter ISO language code per row via langdetect                        |
 | `docbt.text.transforms.count_tokens`      | Adds `token_count` for an OpenAI / Claude-style tokenizer (tiktoken)            |
 | `docbt.text.transforms.find_duplicates`   | Flags near-duplicate rows via MinHash + LSH (Jaccard threshold configurable)    |
+| `docbt.text.transforms.redact_pii`        | Detects + redacts PII via Microsoft Presidio (requires `en_core_web_sm` spaCy model) |
 
-All five are pure functions importable via `from docbt.text import …` if you'd
+All are pure functions importable via `from docbt.text import …` if you'd
 rather wire them into your own transforms.
+
+**PII setup** — `redact_pii` uses spaCy under the hood. First-time install:
+
+```bash
+python -m spacy download en_core_web_sm
+```
+
+Without the model, calls into `redact_pii` raise a clear `PIIError` pointing
+at this command.
 
 ## Tests
 
