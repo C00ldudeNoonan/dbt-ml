@@ -19,6 +19,10 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "watchfiles>=0.21",
     "jinja2>=3.1",
+    "tiktoken>=0.7",
+    "ftfy>=6.2",
+    "langdetect>=1.0",
+    "datasketch>=1.6",
 ]
 
 [project.scripts]
@@ -45,6 +49,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF"]
+# Legitimate Unicode (right single quote, em dash, smart quotes) in docstrings,
+# tests, and examples isn't a typo — we deliberately use it for mojibake demos.
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.12"

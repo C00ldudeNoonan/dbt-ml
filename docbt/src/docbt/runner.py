@@ -305,6 +305,7 @@ def _run_transform_model(
             target_name=resolved.target_name,
             warehouse=resolved.warehouse,
             llm=resolved.llm,
+            options=dict(model.transform.options),
         )
         output = transform_fn(deps, ctx)
     else:
