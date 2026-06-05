@@ -9,6 +9,9 @@
 *.sqlite
 *.sqlite3
 
+# OS detritus
+.DS_Store
+
 # python detritus
 __pycache__/
 *.egg-info/
