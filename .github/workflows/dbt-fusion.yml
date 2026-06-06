@@ -1,0 +1,70 @@
+name: dbt-compat
+
+# Validates that docbt's emitted dbt artifacts parse and build under real dbt
+# engines: dbt-core (dbt-duckdb) as a hard gate, and the dbt Fusion engine as
+# an informational gate while its DuckDB support matures. Flip the Fusion step
+# to a required check (drop `continue-on-error`) once it is reliably green.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: docbt
+
+jobs:
+  dbt-consumer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install docbt
+        run: uv sync
+
+      - name: Materialize the invoice_pipeline example
+        run: |
+          uv run docbt --project-dir examples/invoice_pipeline seed --count 50
+          uv run docbt --project-dir examples/invoice_pipeline run
+
+      - name: Emit dbt sources (+ packages.yml) into the consumer project
+        run: |
+          uv run docbt --project-dir examples/invoice_pipeline emit-dbt-sources \
+            --emit-packages \
+            --output examples/dbt_consumer/models/sources/_docbt_sources.yml
+
+      # ---- Hard gate: dbt-core / dbt-duckdb ----------------------------------
+      - name: dbt-core build (dbt-duckdb)
+        working-directory: docbt/examples/dbt_consumer
+        run: |
+          uv sync
+          uv run dbt deps --profiles-dir .
+          uv run dbt build --profiles-dir .
+
+      # ---- Informational gate: dbt Fusion engine -----------------------------
+      # Fusion is strict (it fails parse on undeclared macros rather than
+      # warning), so it is the real compatibility signal we are targeting.
+      # Kept non-blocking until Fusion's DuckDB adapter support is confirmed.
+      - name: Install dbt Fusion
+        continue-on-error: true
+        run: curl -fsSL https://public.cdn.getdbt.com/fs/install/install.sh | sh -s -- --update
+
+      - name: dbt Fusion parse
+        continue-on-error: true
+        working-directory: docbt/examples/dbt_consumer
+        run: |
+          DBTF="$(command -v dbtf || echo "$HOME/.local/bin/dbtf")"
+          if [ ! -x "$DBTF" ]; then DBTF="$HOME/.local/bin/dbt"; fi
+          "$DBTF" --version
+          "$DBTF" deps
+          "$DBTF" parse

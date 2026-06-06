@@ -3,6 +3,11 @@
 The idea: a dbt-duckdb project pointed at the same DuckDB file can consume
 docbt-materialized tables via `{{ source('docbt_<project>', '<model>') }}`.
 This module emits the sources.yml declaration that makes that work.
+
+The emitted YAML is validated against the strict dbt Fusion engine in CI
+(`.github/workflows/dbt-fusion.yml`). Fusion fails the parse — rather than
+warning — on undeclared macro tests, so anything we emit here that depends on
+a dbt package (e.g. dbt_utils) is paired with a generated `packages.yml`.
 """
 from __future__ import annotations
 
@@ -18,6 +23,12 @@ from .dag import ProjectDAG
 from .profile import resolve_profile
 
 DEFAULT_OUTPUT_FILENAME = "sources.yml"
+DEFAULT_PACKAGES_FILENAME = "packages.yml"
+
+# dbt_utils version range that ships the macro tests we emit. Pinned to the 1.x
+# line, which both dbt-core (>=1.3) and the Fusion engine resolve.
+DBT_UTILS_PACKAGE = "dbt-labs/dbt_utils"
+DBT_UTILS_VERSION = [">=1.1.0", "<2.0.0"]
 
 
 def build_dbt_sources(
@@ -28,7 +39,14 @@ def build_dbt_sources(
     exclude: str | None = None,
     target: str | None = None,
     profiles_dir: Path | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
+    """Build a dbt v2 `sources.yml` payload for docbt's materialized tables.
+
+    `warnings`, when provided, is populated with human-readable notes about test
+    specs that have no faithful dbt source-test equivalent (so the caller can
+    surface them instead of dropping them silently).
+    """
     project, sources_cfg, models = load_project(project_dir)
     resolved = resolve_profile(
         project, project_dir, target=target, profiles_dir=profiles_dir
@@ -50,10 +68,47 @@ def build_dbt_sources(
                 ),
                 "database": catalog,
                 "schema": resolved.warehouse.schema_name,
-                "tables": [_table_for_model(m) for m in selected_models],
+                "tables": [
+                    _table_for_model(m, warnings) for m in selected_models
+                ],
             }
         ],
     }
+
+
+def requires_dbt_utils(payload: dict[str, Any]) -> bool:
+    """Whether the emitted sources reference a dbt_utils macro test.
+
+    Fusion rejects undeclared macros at parse time, so when this is true the
+    consuming project needs a `packages.yml` declaring dbt_utils. Use
+    `build_dbt_packages` / `write_dbt_packages` to generate one.
+    """
+    for source in payload.get("sources", []):
+        for table in source.get("tables", []):
+            for spec in table.get("tests", []):
+                if isinstance(spec, dict) and any(
+                    str(k).startswith("dbt_utils.") for k in spec
+                ):
+                    return True
+    return False
+
+
+def build_dbt_packages() -> dict[str, Any]:
+    """A `packages.yml` payload declaring the packages our macro tests need."""
+    return {
+        "packages": [
+            {"package": DBT_UTILS_PACKAGE, "version": list(DBT_UTILS_VERSION)}
+        ]
+    }
+
+
+def write_dbt_packages(output: Path) -> Path:
+    """Write a `packages.yml` next to the emitted sources file."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        yaml.safe_dump(build_dbt_packages(), sort_keys=False, default_flow_style=False)
+    )
+    return output
 
 
 def write_dbt_sources(
@@ -65,6 +120,8 @@ def write_dbt_sources(
     output: Path | None = None,
     target: str | None = None,
     profiles_dir: Path | None = None,
+    emit_packages: bool = False,
+    warnings: list[str] | None = None,
 ) -> Path:
     project, _, _ = load_project(project_dir)
     payload = build_dbt_sources(
@@ -74,6 +131,7 @@ def write_dbt_sources(
         exclude=exclude,
         target=target,
         profiles_dir=profiles_dir,
+        warnings=warnings,
     )
 
     if output is None:
@@ -84,6 +142,17 @@ def write_dbt_sources(
         output.parent.mkdir(parents=True, exist_ok=True)
 
     output.write_text(yaml.safe_dump(payload, sort_keys=False, default_flow_style=False))
+
+    if requires_dbt_utils(payload):
+        if emit_packages:
+            write_dbt_packages(output.parent / DEFAULT_PACKAGES_FILENAME)
+        elif warnings is not None:
+            warnings.append(
+                "emitted a dbt_utils macro test but no packages.yml — dbt Fusion "
+                "will fail to parse until dbt_utils is declared. Re-run with "
+                "--emit-packages or add dbt_utils to the project's packages.yml."
+            )
+
     return output
 
 
@@ -92,7 +161,9 @@ def _derive_catalog(warehouse: WarehouseConfig) -> str:
     return Path(warehouse.path).stem
 
 
-def _table_for_model(model: ModelConfig) -> dict[str, Any]:
+def _table_for_model(
+    model: ModelConfig, warnings: list[str] | None = None
+) -> dict[str, Any]:
     columns_by_name: dict[str, dict[str, Any]] = {}
 
     for field in model.fields:
@@ -102,7 +173,7 @@ def _table_for_model(model: ModelConfig) -> dict[str, Any]:
 
     table_tests: list[Any] = []
     for spec in model.tests:
-        _apply_test_spec(spec, columns_by_name, table_tests)
+        _apply_test_spec(spec, columns_by_name, table_tests, model.name, warnings)
 
     table: dict[str, Any] = {"name": model.name}
     if model.description:
@@ -121,6 +192,8 @@ def _apply_test_spec(
     spec: Any,
     columns_by_name: dict[str, dict[str, Any]],
     table_tests: list[Any],
+    model_name: str,
+    warnings: list[str] | None,
 ) -> None:
     if isinstance(spec, str):
         _attach_table_test(spec, None, table_tests)
@@ -143,8 +216,8 @@ def _apply_test_spec(
             )
         else:
             # dbt has no native composite-unique on a source table; emit the
-            # dbt_utils macro test so the file is still valid if dbt_utils
-            # is installed in the consuming project.
+            # dbt_utils macro test. See write_dbt_sources / --emit-packages:
+            # Fusion rejects this unless dbt_utils is declared in packages.yml.
             table_tests.append(
                 {
                     "dbt_utils.unique_combination_of_columns": {
@@ -154,8 +227,14 @@ def _apply_test_spec(
             )
         return
 
-    # min_rows / not_empty / has_text don't map cleanly to dbt source tests in v1.
-    # Silently drop them; the user can re-express in dbt-side tests if needed.
+    # min_rows / not_empty / has_text have no faithful dbt source-test
+    # equivalent. Surface them so the user can re-express them dbt-side rather
+    # than discovering the silent gap later.
+    if warnings is not None:
+        warnings.append(
+            f"{model_name}: test '{name}' has no dbt source-test equivalent and "
+            f"was not emitted; re-express it as a dbt-side data test if needed."
+        )
 
 
 def _ensure_col(

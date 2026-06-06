@@ -430,6 +430,12 @@ def test(ctx: click.Context, select: str | None, exclude: str | None) -> None:
     default=None,
     help="Output file (default: <target-path>/sources.yml).",
 )
+@click.option(
+    "--emit-packages/--no-emit-packages",
+    default=False,
+    help="Also write a packages.yml when a dbt_utils macro test is emitted "
+    "(required for dbt Fusion to parse it).",
+)
 @click.pass_context
 def emit_dbt_sources(
     ctx: click.Context,
@@ -437,15 +443,18 @@ def emit_dbt_sources(
     select: str | None,
     exclude: str | None,
     output: Path | None,
+    emit_packages: bool,
 ) -> None:
     """Write a dbt-compatible sources.yml declaring docbt's materialized tables.
 
     Drop the output into a dbt-duckdb project so dbt models can refer to the
-    docbt tables via `{{ source(...) }}`.
+    docbt tables via `{{ source(...) }}`. The output is validated against the
+    dbt Fusion engine in CI.
     """
     project_dir: Path = ctx.obj["project_dir"]
     profiles_dir = ctx.obj["profiles_dir"]
     target = ctx.obj["target"]
+    warnings: list[str] = []
     try:
         path = write_dbt_sources(
             project_dir,
@@ -455,9 +464,13 @@ def emit_dbt_sources(
             output=output,
             target=target,
             profiles_dir=profiles_dir,
+            emit_packages=emit_packages,
+            warnings=warnings,
         )
     except (ConfigError, DAGError, SelectionError, ProfileError) as e:
         raise click.ClickException(str(e)) from e
+    for warning in warnings:
+        click.echo(f"warning: {warning}", err=True)
     click.echo(f"Wrote {path}")
 
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### dbt Fusion compatibility
+
+- `emit-dbt-sources` now surfaces a warning (instead of silently dropping)
+  for test specs with no faithful dbt source-test equivalent
+  (`min_rows`, `not_empty`, `has_text`).
+- `emit-dbt-sources --emit-packages` writes a `packages.yml` declaring
+  `dbt_utils` whenever a composite-unique macro test is emitted, so the output
+  parses under the strict dbt Fusion engine (which fails, rather than warns, on
+  undeclared macros).
+- New `dbt-compat` GitHub Actions workflow validates the emitted sources against
+  both dbt-core (dbt-duckdb, hard gate) and the dbt Fusion engine
+  (informational while its DuckDB support matures) via the `dbt_consumer`
+  example.
+
 ## v0.1.0 (unreleased)
 
 Initial public preview.

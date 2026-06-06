@@ -15,14 +15,27 @@ uv run docbt --project-dir examples/invoice_pipeline seed --count 50
 uv run docbt --project-dir examples/invoice_pipeline run
 
 # 2. Emit dbt sources.yml into this project's models/sources/
+#    --emit-packages also writes a packages.yml when a composite-unique
+#    (dbt_utils) macro test is emitted, which dbt Fusion requires to parse.
 uv run docbt --project-dir examples/invoice_pipeline emit-dbt-sources \
+  --emit-packages \
   --output examples/dbt_consumer/models/sources/_docbt_sources.yml
 
 # 3. Run dbt
 cd examples/dbt_consumer
 uv sync
+uv run dbt deps --profiles-dir .   # no-op unless a packages.yml was emitted
 uv run dbt build --profiles-dir .
 ```
+
+## dbt Fusion
+
+This same project is parsed by the strict **dbt Fusion** engine in CI
+(`.github/workflows/dbt-fusion.yml`). Fusion fails — rather than warns — on
+undeclared macros, so the `--emit-packages` flag above is what keeps the
+generated sources Fusion-parseable. The Fusion step is currently
+non-blocking while its DuckDB adapter support matures; the dbt-core build is
+the hard gate.
 
 `dbt build` will:
 - parse the generated `_docbt_sources.yml` and verify the source tables exist,
