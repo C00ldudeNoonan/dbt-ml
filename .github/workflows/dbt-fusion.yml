@@ -32,10 +32,27 @@ jobs:
       - name: Install docbt
         run: uv sync
 
-      - name: Materialize the invoice_pipeline example
+      - name: Materialize the invoice_pipeline example (+ dbt artifacts)
         run: |
           uv run docbt --project-dir examples/invoice_pipeline seed --count 50
-          uv run docbt --project-dir examples/invoice_pipeline run
+          uv run docbt --project-dir examples/invoice_pipeline run --emit-dbt-artifacts
+
+      - name: Validate emitted dbt manifest.json / run_results.json
+        run: |
+          uv run python - <<'PY'
+          import json
+          base = "examples/invoice_pipeline/target/dbt"
+          m = json.load(open(f"{base}/manifest.json"))
+          assert m["metadata"]["dbt_schema_version"].endswith("manifest/v12.json")
+          assert m["sources"] and m["nodes"] == {}
+          for uid, node in m["sources"].items():
+              assert node["resource_type"] == "source"
+              assert node["unique_id"] == uid
+              assert node["meta"]["docbt"]["code_version"]
+          rr = json.load(open(f"{base}/run_results.json"))
+          assert {r["unique_id"] for r in rr["results"]} <= set(m["sources"])
+          print(f"ok: {len(m['sources'])} sources, {len(rr['results'])} results")
+          PY
 
       - name: Emit dbt sources (+ packages.yml) into the consumer project
         run: |

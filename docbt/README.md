@@ -93,6 +93,7 @@ docbt source freshness                                    # mtime vs warn_after/
 docbt docs generate [--output DIR]                        # static HTML site from manifest.json
 docbt docs serve [--port N]                               # local http.server over target/docs/
 docbt emit-dbt-sources [--output PATH]                    # write dbt-compatible sources.yml
+docbt emit-dbt-manifest [--output PATH]                   # write dbt-schema manifest.json
 docbt clean                                               # delete the project's DuckDB
 
 # Global flags (work on every command):
@@ -243,6 +244,11 @@ Every `docbt compile` / `docbt run` writes to `target/`:
 - **`run_results.json`** — per-model documents processed/skipped, rows written,
   duration, errors.
 - **`sources.yml`** — only when you call `emit-dbt-sources`. dbt-shaped.
+- **`dbt/manifest.json`**, **`dbt/run_results.json`** — dbt-conformant artifacts
+  (manifest schema v12, run-results v6). Written by `emit-dbt-manifest` or
+  `run --emit-dbt-artifacts`. Each docbt table appears as a dbt **source** under
+  `docbt_<project>`, with docbt lineage + `code_version` under `meta.docbt`, so
+  dbt catalog/lineage tooling can read docbt's DAG directly.
 - **`docs/`** — static HTML site (`docbt docs generate`) with project overview,
   Mermaid DAG, per-model pages. Serve locally with `docbt docs serve`.
 

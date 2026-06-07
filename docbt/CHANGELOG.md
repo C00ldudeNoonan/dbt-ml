@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### dbt-schema artifacts
+
+- New `emit-dbt-manifest` command writes a dbt-conformant `manifest.json`
+  (schema v12) describing docbt's materialized tables. Each docbt table is
+  emitted as a dbt source under `docbt_<project>`, with docbt's lineage and
+  `code_version` preserved under each node's `meta.docbt` so dbt catalog/lineage
+  tooling and manifest-diffing can read docbt's DAG directly.
+- `run --emit-dbt-artifacts` additionally writes a dbt-schema `manifest.json` +
+  `run_results.json` (schema v6) to `<target>/dbt/`, alongside docbt's native
+  artifacts (which are unchanged).
+
 ### dbt Fusion compatibility
 
 - `emit-dbt-sources` now surfaces a warning (instead of silently dropping)

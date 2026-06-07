@@ -13,6 +13,7 @@ from .config.model import ModelConfig
 from .config.source import SourceConfig
 from .dag import DAGError, ProjectDAG, SelectionError, parse_ref
 from .dbt_export import write_dbt_sources
+from .dbt_manifest import write_dbt_manifest, write_dbt_run_results
 from .docs import DocsError, generate_docs, serve_docs
 from .freshness import check_freshness
 from .manifest import write_manifest, write_run_results
@@ -309,6 +310,12 @@ def graph(ctx: click.Context) -> None:
     show_default=True,
     help="Parallel worker threads per extraction model.",
 )
+@click.option(
+    "--emit-dbt-artifacts",
+    is_flag=True,
+    help="Also write dbt-schema manifest.json + run_results.json to "
+    "<target>/dbt/ for dbt tooling.",
+)
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -317,6 +324,7 @@ def run(
     exclude: str | None,
     watch: bool,
     threads: int,
+    emit_dbt_artifacts: bool,
 ) -> None:
     """Extract and materialize selected models into DuckDB."""
     project_dir: Path = ctx.obj["project_dir"]
@@ -350,6 +358,12 @@ def run(
 
     write_manifest(project_dir, target=target, profiles_dir=profiles_dir)
     write_run_results(project_dir, results)
+
+    if emit_dbt_artifacts:
+        write_dbt_manifest(project_dir, target=target, profiles_dir=profiles_dir)
+        write_dbt_run_results(
+            project_dir, results, target=target, profiles_dir=profiles_dir
+        )
 
     if not results:
         click.echo("No models selected.")
@@ -471,6 +485,52 @@ def emit_dbt_sources(
         raise click.ClickException(str(e)) from e
     for warning in warnings:
         click.echo(f"warning: {warning}", err=True)
+    click.echo(f"Wrote {path}")
+
+
+@cli.command("emit-dbt-manifest")
+@click.option(
+    "--source-name",
+    default=None,
+    help="dbt source name (default: docbt_<project-name>).",
+)
+@click.option("--select", "select", default=None, help="Selector expression.")
+@click.option("--exclude", default=None, help="Selector expression for nodes to skip.")
+@click.option(
+    "--output",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Output file (default: <target-path>/dbt/manifest.json).",
+)
+@click.pass_context
+def emit_dbt_manifest(
+    ctx: click.Context,
+    source_name: str | None,
+    select: str | None,
+    exclude: str | None,
+    output: Path | None,
+) -> None:
+    """Write a dbt-schema manifest.json describing docbt's materialized tables.
+
+    Each docbt table is emitted as a dbt source (grouped under
+    `docbt_<project>`), with docbt's lineage and code_version preserved under
+    each node's `meta.docbt`. dbt catalog/lineage tooling can read this directly.
+    """
+    project_dir: Path = ctx.obj["project_dir"]
+    profiles_dir = ctx.obj["profiles_dir"]
+    target = ctx.obj["target"]
+    try:
+        path = write_dbt_manifest(
+            project_dir,
+            source_name=source_name,
+            select=select,
+            exclude=exclude,
+            output=output,
+            target=target,
+            profiles_dir=profiles_dir,
+        )
+    except (ConfigError, DAGError, SelectionError, ProfileError) as e:
+        raise click.ClickException(str(e)) from e
     click.echo(f"Wrote {path}")
 
 
