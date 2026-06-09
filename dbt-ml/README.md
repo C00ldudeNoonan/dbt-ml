@@ -8,8 +8,8 @@ and a manifest artifact you can wire into other tools.
 This is the v0.1 PoC: pure Python, DuckDB warehouse. **v0.2 is in scope** —
 adding RAG support (chunking, embeddings, vector storage via LanceDB) and a
 warehouse adapter pattern aimed at the dbt-core set (Postgres, Snowflake,
-BigQuery, Databricks, …). The full Rust+Python design lives in
-`docbt-core-implementation-plan.md` and is deferred to a later v2.
+BigQuery, Databricks, …). A full Rust+Python rebuild is sketched as a
+longer-term v2 direction.
 
 ## Where dbt-ml fits
 
