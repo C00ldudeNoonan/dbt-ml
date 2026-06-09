@@ -1,8 +1,0 @@
-invoice_pipeline:
-  target: dev
-  outputs:
-    dev:
-      warehouse:
-        type: duckdb
-        path: ./target/docbt.duckdb
-        schema: docbt

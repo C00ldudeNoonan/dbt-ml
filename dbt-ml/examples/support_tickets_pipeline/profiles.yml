@@ -1,0 +1,8 @@
+support_tickets_pipeline:
+  target: dev
+  outputs:
+    dev:
+      warehouse:
+        type: duckdb
+        path: ./target/dbt_ml.duckdb
+        schema: tickets

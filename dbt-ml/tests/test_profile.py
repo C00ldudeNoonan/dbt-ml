@@ -1,0 +1,215 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from dbt_ml.config import load_project
+from dbt_ml.profile import (
+    ProfileError,
+    ResolvedProfile,
+    resolve_llm_options,
+    resolve_profile,
+)
+
+
+def _write_project(
+    tmp_path: Path,
+    name: str = "test_proj",
+    *,
+    profile: str | None = None,
+    inline_duckdb: bool = False,
+) -> Path:
+    lines = [f"name: {name}", 'version: "0.1.0"']
+    if profile:
+        lines.append(f"profile: {profile}")
+    if inline_duckdb:
+        lines += [
+            "duckdb:",
+            "  path: ./inline/db.duckdb",
+            "  schema: inline_schema",
+        ]
+    (tmp_path / "dbt_ml_project.yml").write_text("\n".join(lines) + "\n")
+    return tmp_path
+
+
+def _write_profiles(
+    tmp_path: Path,
+    name: str = "test_proj",
+    *,
+    default_target: str = "dev",
+    targets: dict[str, dict] | None = None,
+) -> Path:
+    targets = targets or {
+        "dev": {
+            "warehouse": {
+                "type": "duckdb",
+                "path": "./target/dev.duckdb",
+                "schema": "dev_schema",
+            }
+        }
+    }
+    lines = [f"{name}:", f"  target: {default_target}", "  outputs:"]
+    for tname, tcfg in targets.items():
+        lines.append(f"    {tname}:")
+        wh = tcfg["warehouse"]
+        lines += [
+            "      warehouse:",
+            f"        type: {wh['type']}",
+            f"        path: {wh['path']}",
+            f"        schema: {wh['schema']}",
+        ]
+        if "llm" in tcfg:
+            llm = tcfg["llm"]
+            lines.append("      llm:")
+            for k, v in llm.items():
+                lines.append(f"        {k}: {v}")
+    path = tmp_path / "profiles.yml"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_legacy_fallback_when_no_profile(tmp_path: Path) -> None:
+    _write_project(tmp_path, inline_duckdb=True)
+    project, _, _ = load_project(tmp_path)
+    resolved = resolve_profile(project, tmp_path)
+    assert resolved.profile_name == "<inline>"
+    assert resolved.warehouse.schema_name == "inline_schema"
+
+
+def test_profile_resolves_warehouse(tmp_path: Path) -> None:
+    _write_project(tmp_path, profile="test_proj")
+    _write_profiles(tmp_path)
+    project, _, _ = load_project(tmp_path)
+    resolved = resolve_profile(project, tmp_path)
+    assert resolved.profile_name == "test_proj"
+    assert resolved.target_name == "dev"
+    assert resolved.warehouse.schema_name == "dev_schema"
+
+
+def test_target_override(tmp_path: Path) -> None:
+    _write_project(tmp_path, profile="test_proj")
+    _write_profiles(
+        tmp_path,
+        default_target="dev",
+        targets={
+            "dev": {
+                "warehouse": {"type": "duckdb", "path": "./d.duckdb", "schema": "d"}
+            },
+            "prod": {
+                "warehouse": {"type": "duckdb", "path": "./p.duckdb", "schema": "p"}
+            },
+        },
+    )
+    project, _, _ = load_project(tmp_path)
+    resolved = resolve_profile(project, tmp_path, target="prod")
+    assert resolved.target_name == "prod"
+    assert resolved.warehouse.schema_name == "p"
+
+
+def test_unknown_target_raises(tmp_path: Path) -> None:
+    _write_project(tmp_path, profile="test_proj")
+    _write_profiles(tmp_path)
+    project, _, _ = load_project(tmp_path)
+    with pytest.raises(ProfileError, match="Target 'nope'"):
+        resolve_profile(project, tmp_path, target="nope")
+
+
+def test_missing_profiles_file_raises(tmp_path: Path) -> None:
+    _write_project(tmp_path, profile="test_proj")
+    project, _, _ = load_project(tmp_path)
+    with pytest.raises(ProfileError, match=r"no profiles\.yml was found"):
+        resolve_profile(project, tmp_path)
+
+
+def test_unknown_profile_raises(tmp_path: Path) -> None:
+    _write_project(tmp_path, profile="not_there")
+    _write_profiles(tmp_path, name="something_else")
+    project, _, _ = load_project(tmp_path)
+    with pytest.raises(ProfileError, match="Profile 'not_there' not in"):
+        resolve_profile(project, tmp_path)
+
+
+def test_profiles_dir_override(tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    _write_project(project_dir, profile="test_proj")
+
+    other_dir = tmp_path / "elsewhere"
+    other_dir.mkdir()
+    _write_profiles(other_dir)
+
+    project, _, _ = load_project(project_dir)
+    resolved = resolve_profile(project, project_dir, profiles_dir=other_dir)
+    assert resolved.warehouse.schema_name == "dev_schema"
+
+
+def test_env_var_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    _write_project(project_dir, profile="test_proj")
+
+    other_dir = tmp_path / "via_env"
+    other_dir.mkdir()
+    _write_profiles(other_dir)
+
+    monkeypatch.setenv("DOCBT_PROFILES_DIR", str(other_dir))
+    project, _, _ = load_project(project_dir)
+    resolved = resolve_profile(project, project_dir)
+    assert resolved.warehouse.schema_name == "dev_schema"
+
+
+def test_llm_options_merged_from_profile(tmp_path: Path) -> None:
+    _write_project(tmp_path, profile="test_proj")
+    _write_profiles(
+        tmp_path,
+        targets={
+            "dev": {
+                "warehouse": {"type": "duckdb", "path": "./d.duckdb", "schema": "d"},
+                "llm": {
+                    "provider": "anthropic",
+                    "model": "claude-haiku-4-5",
+                    "cache_path": "./target/cache.duckdb",
+                },
+            }
+        },
+    )
+    project, _, _ = load_project(tmp_path)
+    resolved = resolve_profile(project, tmp_path)
+    options = resolve_llm_options({"fields": [{"name": "x"}]}, resolved)
+    assert options["model"] == "claude-haiku-4-5"
+    assert options["cache_path"].endswith("cache.duckdb")
+    assert options["fields"] == [{"name": "x"}]
+
+
+def test_model_option_overrides_profile(tmp_path: Path) -> None:
+    _write_project(tmp_path, profile="test_proj")
+    _write_profiles(
+        tmp_path,
+        targets={
+            "dev": {
+                "warehouse": {"type": "duckdb", "path": "./d.duckdb", "schema": "d"},
+                "llm": {"provider": "anthropic", "model": "claude-haiku-4-5"},
+            }
+        },
+    )
+    project, _, _ = load_project(tmp_path)
+    resolved = resolve_profile(project, tmp_path)
+    options = resolve_llm_options(
+        {"model": "claude-sonnet-4-6", "fields": []}, resolved
+    )
+    assert options["model"] == "claude-sonnet-4-6"
+
+
+def test_resolved_profile_is_frozen_dataclass(tmp_path: Path) -> None:
+    import dataclasses
+
+    _write_project(tmp_path, profile="test_proj")
+    _write_profiles(tmp_path)
+    project, _, _ = load_project(tmp_path)
+    resolved = resolve_profile(project, tmp_path)
+    assert isinstance(resolved, ResolvedProfile)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        resolved.target_name = "other"  # type: ignore[misc]

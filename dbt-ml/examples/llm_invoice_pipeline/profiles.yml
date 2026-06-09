@@ -1,0 +1,13 @@
+llm_invoice_pipeline:
+  target: dev
+  outputs:
+    dev:
+      warehouse:
+        type: duckdb
+        path: ./target/dbt_ml.duckdb
+        schema: llm_invoices
+      llm:
+        provider: anthropic
+        model: claude-haiku-4-5
+        api_key_env: ANTHROPIC_API_KEY
+        cache_path: ./target/llm_cache.duckdb
