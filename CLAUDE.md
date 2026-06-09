@@ -5,8 +5,8 @@
 dbt-ml is "dbt for unstructured data." v0.1 (merged) is the pure-Python PoC:
 DuckDB warehouse, 6 backends (json/markdown/pdf/html/email/llm), profiles,
 manifest artifacts, dbt-shaped selectors, schema tests, incremental
-materialization. The full Rust+Python design lives in
-`docbt-core-implementation-plan.md` and is deferred to a later v2.
+materialization. A full Rust+Python design exists as a private working note
+(`docs/private/`, gitignored) and is deferred to a later v2.
 
 v0.2 is being scoped: see the GitHub issue tagged `roadmap` for the live plan.
 The headline shifts are RAG support (chunking, embeddings, vector storage)
