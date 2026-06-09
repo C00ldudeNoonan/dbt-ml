@@ -1,18 +1,18 @@
-# docbt
+# dbt-ml
 
-**dbt for unstructured data.** docbt brings the dbt workflow — declarative
+**dbt for unstructured data.** dbt-ml brings the dbt workflow — declarative
 models, a dependency DAG, `ref()`, tests, incremental builds, lineage, and a
 manifest artifact — to folders of documents: PDFs, markdown, HTML, JSON,
 email, and free-form text.
 
-If you know dbt, you already know docbt. You declare sources and models in
-YAML; docbt builds the DAG, runs it incrementally, materializes the results to
+If you know dbt, you already know dbt-ml. You declare sources and models in
+YAML; dbt-ml builds the DAG, runs it incrementally, materializes the results to
 your warehouse, runs your tests, and emits artifacts other tools can consume.
 
 > **Status: working proof of concept.** Pure Python, DuckDB warehouse today.
 > The warehouse adapter pattern (v0.2.1, merged) opens the path to the
 > dbt-core adapter set — LanceDB, Postgres, Snowflake, BigQuery, Databricks,
-> Redshift. See [`docbt/README.md`](docbt/README.md) for the full reference.
+> Redshift. See [`dbt-ml/README.md`](dbt-ml/README.md) for the full reference.
 
 ## What a pipeline looks like
 
@@ -77,12 +77,12 @@ models:
 ### Run it
 
 ```bash
-uv run docbt init invoices --template pdf   # scaffold a project
-# drop your PDFs into ./invoices/data/invoices_pdf/  (or `docbt seed` synthetic ones)
+uv run dbt-ml init invoices --template pdf   # scaffold a project
+# drop your PDFs into ./invoices/data/invoices_pdf/  (or `dbt-ml seed` synthetic ones)
 cd invoices
-uv run docbt run                            # build the DAG into DuckDB
-uv run docbt test                           # run the schema tests
-uv run docbt show extracted_invoices        # peek at the result
+uv run dbt-ml run                            # build the DAG into DuckDB
+uv run dbt-ml test                           # run the schema tests
+uv run dbt-ml show extracted_invoices        # peek at the result
 ```
 
 ```
@@ -92,9 +92,9 @@ raw_pdf_text          extraction  incremental            5         0       5    
 extracted_invoices    transform   full                   0         0       5     2.10
 ```
 
-## Why docbt
+## Why dbt-ml
 
-| | Imperative Python (LlamaIndex) | Managed RAG (Cortex Search, Bedrock KB) | **docbt** |
+| | Imperative Python (LlamaIndex) | Managed RAG (Cortex Search, Bedrock KB) | **dbt-ml** |
 |---|---|---|---|
 | Declarative models + DAG | ✗ | partial | ✓ |
 | Tests on extracted data | ✗ | ✗ | ✓ |
@@ -104,7 +104,7 @@ extracted_invoices    transform   full                   0         0       5    
 | Reviewable like a dbt PR | ✗ | ✗ | ✓ |
 | Composes with existing dbt | ✗ | partial | ✓ |
 
-docbt isn't trying to win on time-to-first-demo (managed services do) or raw
+dbt-ml isn't trying to win on time-to-first-demo (managed services do) or raw
 flexibility (LlamaIndex does). It wins on **reproducibility, testability, and
 fitting the workflow analytics engineers already use.**
 
@@ -120,33 +120,33 @@ fitting the workflow analytics engineers already use.**
   warn/error severities, source freshness, profiles with `--target`.
 - **Artifacts** — `manifest.json`, `run_results.json`, a static docs site, and
   `emit-dbt-sources` to hand off to a dbt-duckdb project.
-- **Composes with dbt** — docbt does the unstructured → structured "E"; dbt
-  does the SQL "T", reading docbt's tables as native sources.
+- **Composes with dbt** — dbt-ml does the unstructured → structured "E"; dbt
+  does the SQL "T", reading dbt-ml's tables as native sources.
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/C00ldudeNoonan/doc-dbt
-cd doc-dbt/docbt
+git clone https://github.com/C00ldudeNoonan/dbt-ml
+cd dbt-ml/dbt-ml
 uv sync
 cd examples/pdf_invoice_pipeline
-uv run docbt seed --count 5      # generate synthetic invoice PDFs
-uv run docbt run
-uv run docbt test
+uv run dbt-ml seed --count 5      # generate synthetic invoice PDFs
+uv run dbt-ml run
+uv run dbt-ml test
 ```
 
-Six runnable examples live in [`docbt/examples/`](docbt/examples/) — invoices,
+Six runnable examples live in [`dbt-ml/examples/`](dbt-ml/examples/) — invoices,
 blog posts, support tickets (SLA breach detection), PDF → LLM extraction, and a
 dbt-duckdb consumer project.
 
 ## Documentation
 
-- **[Full reference](docbt/README.md)** — every backend, command, config block,
+- **[Full reference](dbt-ml/README.md)** — every backend, command, config block,
   and the roadmap.
-- **[Contributing](docbt/CONTRIBUTING.md)** — how to add a backend, test, or
+- **[Contributing](dbt-ml/CONTRIBUTING.md)** — how to add a backend, test, or
   command.
-- **[Changelog](docbt/CHANGELOG.md)**
+- **[Changelog](dbt-ml/CHANGELOG.md)**
 
 ## License
 
-[MIT](docbt/LICENSE)
+[MIT](dbt-ml/LICENSE)

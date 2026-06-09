@@ -1,8 +1,8 @@
-# CLAUDE.md — docbt
+# CLAUDE.md — dbt-ml
 
 ## What this is
 
-docbt is "dbt for unstructured data." v0.1 (merged) is the pure-Python PoC:
+dbt-ml is "dbt for unstructured data." v0.1 (merged) is the pure-Python PoC:
 DuckDB warehouse, 6 backends (json/markdown/pdf/html/email/llm), profiles,
 manifest artifacts, dbt-shaped selectors, schema tests, incremental
 materialization. The full Rust+Python design lives in
@@ -27,12 +27,12 @@ and broadening warehouse support to match the dbt-core adapter set.
 
 ```
 uv sync                                # install deps
-uv run docbt init my_project           # scaffold (templates: json/pdf/markdown/html)
-uv run docbt seed --count 20           # synthetic data
-uv run docbt run                       # extract + materialize
-uv run docbt test                      # schema + custom python tests
-uv run docbt docs generate             # static HTML site from manifest.json
-uv run pytest                          # docbt package's own tests
+uv run dbt-ml init my_project           # scaffold (templates: json/pdf/markdown/html)
+uv run dbt-ml seed --count 20           # synthetic data
+uv run dbt-ml run                       # extract + materialize
+uv run dbt-ml test                      # schema + custom python tests
+uv run dbt-ml docs generate             # static HTML site from manifest.json
+uv run pytest                          # dbt-ml package's own tests
 ```
 
 ## Conventions
@@ -44,14 +44,14 @@ uv run pytest                          # docbt package's own tests
 
 ## Key files
 
-- `docbt/src/docbt/config/` — Pydantic models for project/source/model/profile YAML
-- `docbt/src/docbt/dag.py` — graphlib-based DAG + selectors + Mermaid render
-- `docbt/src/docbt/state.py` — DuckDB-backed incremental state (per-adapter in v0.2+)
-- `docbt/src/docbt/runner.py` — extract → materialize orchestration
-- `docbt/src/docbt/backends/` — extraction backends
-- `docbt/src/docbt/profile.py` — profile discovery + resolution
-- `docbt/src/docbt/manifest.py` / `docs.py` / `dbt_export.py` — artifacts
-- `docbt/examples/*/` — runnable example projects
+- `dbt-ml/src/dbt_ml/config/` — Pydantic models for project/source/model/profile YAML
+- `dbt-ml/src/dbt_ml/dag.py` — graphlib-based DAG + selectors + Mermaid render
+- `dbt-ml/src/dbt_ml/state.py` — DuckDB-backed incremental state (per-adapter in v0.2+)
+- `dbt-ml/src/dbt_ml/runner.py` — extract → materialize orchestration
+- `dbt-ml/src/dbt_ml/backends/` — extraction backends
+- `dbt-ml/src/dbt_ml/profile.py` — profile discovery + resolution
+- `dbt-ml/src/dbt_ml/manifest.py` / `docs.py` / `dbt_export.py` — artifacts
+- `dbt-ml/examples/*/` — runnable example projects
 
 ## Private working notes
 
@@ -61,4 +61,4 @@ Internal industry research and design sketches live there; never commit them.
 ## Brand note
 
 "dbt" is always lowercase, even at the start of a sentence. The project name
-here is "docbt" (lowercase). dbt Labs is the company (capital L).
+here is "dbt-ml" (lowercase). dbt Labs is the company (capital L).
