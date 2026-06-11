@@ -1,0 +1,54 @@
+version: 2
+
+models:
+  - name: raw_papers
+    description: "arXiv paper metadata projected into a typed table"
+    source: ref('arxiv_papers')
+
+    extraction:
+      backend: json
+      options:
+        fields:
+          - arxiv_id
+          - title
+          - authors
+          - n_authors
+          - primary_category
+          - categories
+          - published
+          - abstract
+
+    materialization: incremental
+
+    fields:
+      - name: arxiv_id
+      - name: title
+      - name: n_authors
+      - name: primary_category
+      - name: published
+      - name: abstract
+
+    tags: [raw, arxiv]
+
+    # Traditional, deterministic ML data-quality checks (no LLM, no sampling) —
+    # this is the demonstration vehicle for issue #10.
+    tests:
+      # structural
+      - not_null: [arxiv_id, title, primary_category]
+      - unique: arxiv_id
+      # format: arXiv ids look like YYMM.NNNNN
+      - matches_regex: { column: arxiv_id, pattern: '^\d{4}\.\d{4,5}$' }
+      # categorical membership
+      - accepted_values:
+          column: primary_category
+          values: [cs.LG, cs.CL, cs.CV, cs.AI, cs.IR, cs.DB, stat.ML, cs.NE, cs.DC]
+      # plausibility range on author count
+      - accepted_range: { column: n_authors, min: 1, max: 30 }
+      # silent-extraction-failure guard
+      - null_rate: { column: title, max: 0.0 }
+      # deterministic faithfulness: the title must actually appear in the abstract
+      # (catches hallucinated/garbled titles with zero LLM calls)
+      - grounded_in:
+          value: title
+          source: abstract
+          method: exact

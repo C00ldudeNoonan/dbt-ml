@@ -193,6 +193,8 @@ at this command.
 
 ## Tests
 
+**Structural:**
+
 ```yaml
 tests:
   - not_null: [vendor, total]            # column-level, fails the run
@@ -204,6 +206,24 @@ tests:
   - python: tests.my_check               # custom: tests/my_check.py defines run(con, table_ref) -> str | None
 ```
 
+**Traditional ML / statistical data-quality checks** (deterministic, no LLM, no
+sampling — see [issue #10](https://github.com/C00ldudeNoonan/dbt-ml/issues/10)
+for the full design including the optional LLM-judge tier):
+
+```yaml
+tests:
+  - matches_regex: { column: arxiv_id, pattern: '^\d{4}\.\d{4,5}$' }
+  - accepted_values: { column: primary_category, values: [cs.LG, cs.CL, stat.ML] }
+  - accepted_range: { column: n_authors, min: 1, max: 30 }
+  - null_rate: { column: title, max: 0.0 }       # silent-extraction-failure guard
+  # deterministic faithfulness — extracted value must appear in the source text,
+  # catching hallucinated values with zero LLM calls:
+  - grounded_in: { value: title, source: abstract, method: exact }
+```
+
+`grounded_in` also supports `method: fuzzy` with a `min_score`. These run as
+full-table aggregates, so they stay cheap and reproducible.
+
 ## Examples in this repo
 
 | Path                                | What it shows                                                          |
@@ -213,6 +233,7 @@ tests:
 | `examples/pdf_invoice_pipeline/`    | PDFs → text via pypdf → LLM-extracted structured fields                |
 | `examples/llm_invoice_pipeline/`    | Free-form invoice text → LLM extraction (no PDF stage)                 |
 | `examples/support_tickets_pipeline/`| JSON tickets → open queue + SLA breaches + per-team workload (no LLM)  |
+| `examples/arxiv_papers/`            | arXiv metadata → deterministic data-quality checks (incl. `grounded_in`) |
 | `examples/dbt_consumer/`            | dbt-duckdb project consuming dbt-ml-materialized tables                 |
 
 Each example is runnable end-to-end with `uv run dbt-ml --project-dir examples/<name> ...`.
