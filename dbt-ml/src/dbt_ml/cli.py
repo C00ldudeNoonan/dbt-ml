@@ -19,6 +19,7 @@ from .manifest import write_manifest, write_run_results
 from .profile import ProfileError, resolve_profile
 from .runner import RunError, clean_project, run_project
 from .synth import (
+    generate_arxiv_papers,
     generate_invoice_pdfs,
     generate_invoice_texts,
     generate_invoices,
@@ -138,6 +139,7 @@ _SEEDERS_BY_TYPE = {
     "product_pages": generate_product_pages,
     "tickets": generate_support_tickets,
     "emails": generate_support_emails,
+    "arxiv": generate_arxiv_papers,
 }
 
 

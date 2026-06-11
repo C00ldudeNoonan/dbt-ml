@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: arxiv_papers
+    description: "arXiv paper records (synthetic by default; see scripts/fetch_arxiv.py for real data)"
+    path: "./data/papers/"
+    file_pattern: "*.json"
+    recursive: true
+    tags: [raw, arxiv]

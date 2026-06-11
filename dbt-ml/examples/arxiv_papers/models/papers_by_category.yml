@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: papers_by_category
+    description: "Paper counts and mean author count per primary category"
+    depends_on:
+      - ref('raw_papers')
+
+    transform:
+      type: python
+      module: transforms.papers_by_category
+
+    materialization: full
+
+    fields:
+      - name: primary_category
+      - name: paper_count
+      - name: avg_authors
+
+    tags: [mart, arxiv]
+
+    tests:
+      - not_null: [primary_category, paper_count]
+      - unique: primary_category
+      - accepted_range: { column: avg_authors, min: 1, max: 30 }
