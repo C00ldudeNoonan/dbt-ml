@@ -8,8 +8,39 @@ import duckdb
 import pytest
 
 from dbt_ml.manifest import write_run_results
-from dbt_ml.runner import RunError, clean_project, run_project
+from dbt_ml.runner import RunError, build_project, clean_project, run_project
 from dbt_ml.synth import generate_invoices, generate_support_tickets
+
+
+def test_build_runs_and_tests_in_order(fresh_project: Path) -> None:
+    generate_invoices(10, fresh_project / "data" / "invoices", seed=1)
+
+    result = build_project(fresh_project)
+    run_names = {r.model_name for r in result.run_results}
+    assert run_names == {"raw_invoices", "invoice_summary", "monthly_totals"}
+    assert result.skipped == []
+    assert all(t.status == "pass" for t in result.test_results)
+    assert any(t.model_name == "raw_invoices" for t in result.test_results)
+
+
+def test_build_skips_downstream_on_test_failure(fresh_project: Path) -> None:
+    generate_invoices(5, fresh_project / "data" / "invoices", seed=1)
+    raw_yml = fresh_project / "models" / "raw_invoices.yml"
+    raw_yml.write_text(
+        raw_yml.read_text().replace(
+            "tests:", "tests:\n      - min_rows: 100000", 1
+        )
+    )
+
+    result = build_project(fresh_project)
+    assert "raw_invoices" in {r.model_name for r in result.run_results}
+    assert set(result.skipped) == {"invoice_summary", "monthly_totals"}
+    assert any(
+        t.model_name == "raw_invoices" and t.status == "fail"
+        for t in result.test_results
+    )
+    # downstream models never ran
+    assert "invoice_summary" not in {r.model_name for r in result.run_results}
 
 
 @pytest.fixture

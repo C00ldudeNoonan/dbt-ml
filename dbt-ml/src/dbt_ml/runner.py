@@ -12,6 +12,7 @@ import polars as pl
 
 from .adapters import WarehouseAdapter, create_adapter
 from .backends import ExtractionResult, get_backend
+from .checks import TestResult, run_model_tests
 from .classic_ml import run_classic_ml_model
 from .config import load_project
 from .config.model import ModelConfig
@@ -81,6 +82,13 @@ class ModelRunResult:
     artifact_metadata: dict[str, Any] | None = None
 
 
+@dataclass
+class BuildResult:
+    run_results: list[ModelRunResult] = field(default_factory=list)
+    test_results: list[TestResult] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+
+
 def run_project(
     project_dir: Path,
     *,
@@ -123,6 +131,76 @@ def run_project(
             results_by_name = {name: _run(name, adapter) for name in selected}
 
     return [results_by_name[name] for name in selected]
+
+
+def build_project(
+    project_dir: Path,
+    *,
+    full_refresh: bool = False,
+    select: str | None = None,
+    exclude: str | None = None,
+    target: str | None = None,
+    profiles_dir: Path | None = None,
+    threads: int = 1,
+) -> BuildResult:
+    """Run + test each model in dependency order. A model whose run errors or
+    whose tests hard-fail blocks all its descendants, which are reported as
+    skipped (dbt `build` semantics)."""
+    project, sources, models = load_project(project_dir)
+    resolved = resolve_profile(
+        project, project_dir, target=target, profiles_dir=profiles_dir
+    )
+    dag = ProjectDAG(sources, models)
+    selected = dag.select_models(select=select, exclude=exclude)
+
+    source_docs: dict[str, list[DocumentRef]] = {
+        s.name: _discover_source(s, project_dir) for s in sources
+    }
+    models_by_name = {m.name: m for m in models}
+
+    out = BuildResult()
+    blocked: set[str] = set()
+
+    with create_adapter(resolved.warehouse, project_dir=project_dir) as adapter:
+        for name in selected:
+            if name in blocked:
+                out.skipped.append(name)
+                continue
+            model = models_by_name[name]
+            try:
+                result = _run_model(
+                    model=model,
+                    project=project,
+                    project_dir=project_dir,
+                    source_docs=source_docs,
+                    adapter=adapter,
+                    resolved=resolved,
+                    full_refresh=full_refresh,
+                    threads=threads,
+                )
+            except RunError as e:
+                out.run_results.append(
+                    ModelRunResult(
+                        model_name=name,
+                        materialization=model.materialization,
+                        kind="unknown",
+                        errors=[str(e)],
+                    )
+                )
+                blocked |= dag.descendants(name)
+                continue
+
+            out.run_results.append(result)
+            if result.errors:
+                blocked |= dag.descendants(name)
+                continue
+
+            model_tests = run_model_tests(model, adapter, project_dir=project_dir)
+            out.test_results.extend(model_tests)
+            if any(t.is_hard_failure for t in model_tests):
+                blocked |= dag.descendants(name)
+
+    return out
 
 
 def _run_in_batches(
