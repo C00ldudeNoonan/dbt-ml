@@ -56,3 +56,23 @@ models:
         alternate_sign: false
     materialization: full
     tags: [features, classic_ml]
+
+  - name: ticket_priority_nb
+    description: "Naive Bayes classifier that predicts ticket priority from summaries"
+    depends_on: [ref('raw_tickets')]
+    ml:
+      task: classifier
+      mode: fit_transform
+      provider: builtin.naive_bayes
+      text_field: summary
+      label_field: priority
+      metrics:
+        - accuracy
+        - class_count
+        - vocabulary_size
+      options:
+        ngram_range: [1, 2]
+        min_df: 1
+        alpha: 1.0
+    materialization: full
+    tags: [classifier, classic_ml]

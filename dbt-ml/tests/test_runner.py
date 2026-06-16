@@ -32,13 +32,18 @@ def _query(db_path: Path, sql: str) -> list[tuple]:
         con.close()
 
 
-def _write_ticket(path: Path, ticket_id: str, summary: str) -> None:
+def _write_ticket(
+    path: Path,
+    ticket_id: str,
+    summary: str,
+    priority: str = "medium",
+) -> None:
     path.write_text(
         json.dumps(
             {
                 "ticket_id": ticket_id,
                 "summary": summary,
-                "priority": "medium",
+                "priority": priority,
             }
         )
     )
@@ -275,6 +280,115 @@ def test_classic_ml_tfidf_fit_then_predict(tmp_path: Path) -> None:
     assert predict.rows_written > 0
     assert fit.artifact_version == predict.artifact_version
     assert fit.training_input == predict.training_input
+
+
+def test_classic_ml_naive_bayes_classifier_end_to_end(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    tickets = project / "data" / "tickets"
+    tickets.mkdir(parents=True)
+    _write_ticket(tickets / "ticket_1.json", "T-1", "urgent outage blocked", "high")
+    _write_ticket(tickets / "ticket_2.json", "T-2", "critical outage urgent", "high")
+    _write_ticket(tickets / "ticket_3.json", "T-3", "billing question invoice", "low")
+    _write_ticket(tickets / "ticket_4.json", "T-4", "password reset question", "low")
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_priority_classifier",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: classifier",
+                "      mode: fit_transform",
+                "      provider: builtin.naive_bayes",
+                "      text_field: summary",
+                "      label_field: priority",
+                "      options:",
+                "        min_df: 1",
+                "        alpha: 1.0",
+                "    materialization: full",
+            ]
+        )
+    )
+
+    results = run_project(project)
+    classifier = next(r for r in results if r.model_name == "ticket_priority_classifier")
+    assert classifier.kind == "ml"
+    assert classifier.rows_written == 4
+    assert classifier.artifact_version is not None
+    assert classifier.metrics["class_count"] == 2
+    assert classifier.metrics["vocabulary_size"] > 0
+    assert classifier.metrics["accuracy"] == 1.0
+    assert classifier.artifact_metadata is not None
+    assert classifier.artifact_metadata["provider"] == "builtin.naive_bayes"
+
+    artifact = project / "target" / "artifacts" / "ticket_priority_classifier"
+    assert (artifact / "metadata.json").exists()
+    assert (artifact / "model.json").exists()
+    model_payload = json.loads((artifact / "model.json").read_text())
+    assert model_payload["classes"] == ["high", "low"]
+
+    db = project / "target" / "dbt_ml.duckdb"
+    rows = _query(
+        db,
+        'SELECT COUNT(*), SUM(CASE WHEN correct THEN 1 ELSE 0 END) '
+        'FROM "dbt_ml".classic_text_ml.ticket_priority_classifier',
+    )
+    assert rows == [(4, 4)]
+
+
+def test_classic_ml_naive_bayes_fit_then_predict(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    tickets = project / "data" / "tickets"
+    tickets.mkdir(parents=True)
+    _write_ticket(tickets / "ticket_1.json", "T-1", "urgent outage blocked", "high")
+    _write_ticket(tickets / "ticket_2.json", "T-2", "critical outage urgent", "high")
+    _write_ticket(tickets / "ticket_3.json", "T-3", "billing question invoice", "low")
+    _write_ticket(tickets / "ticket_4.json", "T-4", "password reset question", "low")
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_priority_fit",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: classifier",
+                "      mode: fit",
+                "      provider: builtin.naive_bayes",
+                "      text_field: summary",
+                "      label_field: priority",
+                "      artifact:",
+                "        path: target/artifacts/ticket_priority",
+                "      options:",
+                "        min_df: 1",
+                "  - name: ticket_priority_predict",
+                "    depends_on: [ref('raw_tickets'), ref('ticket_priority_fit')]",
+                "    ml:",
+                "      task: classifier",
+                "      mode: predict",
+                "      provider: builtin.naive_bayes",
+                "      text_field: summary",
+                "      label_field: priority",
+                "      artifact:",
+                "        path: target/artifacts/ticket_priority",
+            ]
+        )
+    )
+
+    results = run_project(project)
+    by_name = {r.model_name: r for r in results}
+    fit = by_name["ticket_priority_fit"]
+    predict = by_name["ticket_priority_predict"]
+    assert fit.rows_written == 1
+    assert predict.rows_written == 4
+    assert fit.artifact_version == predict.artifact_version
+    assert fit.training_input == predict.training_input
+    assert predict.metrics["accuracy"] == 1.0
 
 
 def test_classic_ml_predict_missing_artifact_reports_lifecycle_error(tmp_path: Path) -> None:
