@@ -8,7 +8,7 @@ import pytest
 from dbt_ml.docs import generate_docs
 from dbt_ml.manifest import write_run_results
 from dbt_ml.runner import run_project
-from dbt_ml.synth import generate_invoices
+from dbt_ml.synth import generate_invoices, generate_support_tickets
 
 
 @pytest.fixture
@@ -60,3 +60,18 @@ def test_model_page_renders_with_run_data(fresh_project: Path) -> None:
     raw_page = (result.output_dir / "model_raw_invoices.html").read_text()
     assert "Last run" in raw_page
     assert "rows written" in raw_page
+
+
+def test_model_page_renders_ml_artifact_metadata(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    generate_support_tickets(4, project / "data" / "tickets", seed=15)
+    results = run_project(project)
+    write_run_results(project, results)
+
+    result = generate_docs(project)
+    page = (result.output_dir / "model_ticket_tfidf.html").read_text()
+    assert "artifact version" in page
+    assert "artifact metadata" in page
+    assert "artifact_files_hash" in page

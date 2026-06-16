@@ -8,7 +8,7 @@ import duckdb
 import pytest
 
 from dbt_ml.manifest import write_run_results
-from dbt_ml.runner import clean_project, run_project
+from dbt_ml.runner import RunError, clean_project, run_project
 from dbt_ml.synth import generate_invoices, generate_support_tickets
 
 
@@ -199,8 +199,21 @@ def test_classic_ml_tfidf_end_to_end(tmp_path: Path) -> None:
     assert ml_result.metrics["feature_rows"] == ml_result.rows_written
 
     artifact = project / "target" / "artifacts" / "ticket_tfidf"
-    assert (artifact / "metadata.json").exists()
+    metadata_path = artifact / "metadata.json"
+    assert metadata_path.exists()
     assert (artifact / "vocabulary.json").exists()
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata["artifact_schema_version"] == 1
+    assert metadata["artifact_type"] == "classic_ml"
+    assert metadata["artifact_version"] == ml_result.artifact_version
+    assert metadata["artifact_files_hash"]
+    assert metadata["code_version"]
+    assert metadata["config_hash"]
+    assert metadata["runtime"]["provider"] == "builtin.tfidf"
+
+    registry_path = project / "target" / "artifacts" / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    assert registry["artifacts"]["ticket_tfidf"]["artifact_version"] == ml_result.artifact_version
 
     db = project / "target" / "dbt_ml.duckdb"
     rows = _query(
@@ -217,6 +230,7 @@ def test_classic_ml_tfidf_end_to_end(tmp_path: Path) -> None:
     assert emitted["artifact_version"] == ml_result.artifact_version
     assert emitted["training_input"]["row_count"] == 8
     assert emitted["metrics"]["vocabulary_size"] == ml_result.metrics["vocabulary_size"]
+    assert emitted["artifact_metadata"]["artifact_files_hash"] == metadata["artifact_files_hash"]
 
 
 def test_classic_ml_tfidf_fit_then_predict(tmp_path: Path) -> None:
@@ -261,6 +275,98 @@ def test_classic_ml_tfidf_fit_then_predict(tmp_path: Path) -> None:
     assert predict.rows_written > 0
     assert fit.artifact_version == predict.artifact_version
     assert fit.training_input == predict.training_input
+
+
+def test_classic_ml_predict_missing_artifact_reports_lifecycle_error(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_tfidf_predict",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: features",
+                "      mode: predict",
+                "      provider: builtin.tfidf",
+                "      text_field: summary",
+                "      artifact:",
+                "        path: target/artifacts/missing_tfidf",
+            ]
+        )
+    )
+    generate_support_tickets(2, project / "data" / "tickets", seed=12)
+
+    with pytest.raises(RunError, match="missing artifact metadata"):
+        run_project(project)
+
+
+def test_classic_ml_predict_stale_artifact_payload_reports_lifecycle_error(
+    tmp_path: Path,
+) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    generate_support_tickets(4, project / "data" / "tickets", seed=13)
+    run_project(project)
+
+    vocab_path = project / "target" / "artifacts" / "ticket_tfidf" / "vocabulary.json"
+    vocab = json.loads(vocab_path.read_text())
+    vocab["terms"].append("synthetic_stale_term")
+    vocab_path.write_text(json.dumps(vocab, indent=2, sort_keys=True))
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_tfidf_predict",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: features",
+                "      mode: predict",
+                "      provider: builtin.tfidf",
+                "      text_field: summary",
+                "      artifact:",
+                "        path: target/artifacts/ticket_tfidf",
+            ]
+        )
+    )
+
+    with pytest.raises(RunError, match="stale artifact payload"):
+        run_project(project)
+
+
+def test_classic_ml_predict_incompatible_provider_reports_lifecycle_error(
+    tmp_path: Path,
+) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    generate_support_tickets(4, project / "data" / "tickets", seed=14)
+    run_project(project)
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_count_predict",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: features",
+                "      mode: predict",
+                "      provider: builtin.count",
+                "      text_field: summary",
+                "      artifact:",
+                "        path: target/artifacts/ticket_tfidf",
+            ]
+        )
+    )
+
+    with pytest.raises(RunError, match="incompatible artifact provider"):
+        run_project(project)
 
 
 def test_classic_ml_count_vectorizer_options(tmp_path: Path) -> None:

@@ -54,6 +54,7 @@ class ModelRunResult:
     artifact_version: str | None = None
     training_input: dict[str, Any] | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
+    artifact_metadata: dict[str, Any] | None = None
 
 
 def run_project(
@@ -366,6 +367,7 @@ def _run_ml_model(
         artifact_version=output.artifact_version,
         training_input=output.training_input,
         metrics=output.metrics,
+        artifact_metadata=output.artifact_metadata,
     )
 
 

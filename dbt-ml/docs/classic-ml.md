@@ -97,15 +97,27 @@ The same grammar needs to support training and applying artifacts:
 
 Artifacts should live under `target/artifacts/<model_name>/` by default unless
 the user provides `ml.artifact.path`. A provider may write multiple files
-there, but it must expose a stable metadata record:
+there, but it must expose a stable metadata record and register the latest
+artifact in `target/artifacts/registry.json`.
 
 ```json
 {
+  "artifact_schema_version": 1,
+  "artifact_type": "classic_ml",
   "model_name": "ticket_tfidf",
   "task": "features",
   "provider": "builtin.tfidf",
   "mode": "fit_transform",
   "artifact_version": "16-char-hash",
+  "artifact_files_hash": "16-char-hash",
+  "code_version": "16-char-hash",
+  "config_hash": "16-char-hash",
+  "runtime": {
+    "python": "3.12.4",
+    "dbt_ml": "0.1.0",
+    "polars": "1.x",
+    "provider": "builtin.tfidf"
+  },
   "training_input": {
     "refs": ["raw_tickets"],
     "row_count": 1000,
@@ -118,10 +130,17 @@ there, but it must expose a stable metadata record:
 }
 ```
 
-`manifest.json` should contain the static `ml:` config and `code_version`.
-`run_results.json` includes artifact version, training input, and metrics for
-executed ML models. The first executors keep this shape small rather than
-inventing per-provider result formats.
+`manifest.json` contains the static `ml:` config and `code_version`.
+`run_results.json` includes artifact path, artifact version, training input,
+metrics, and the full artifact metadata for executed ML models. Generated docs
+render the same metadata on the model page when a run result is available.
+
+Prediction modes validate artifacts before materializing output:
+
+- missing metadata or payload files fail with a missing-artifact error;
+- unsupported schema versions or provider/task mismatches fail with an
+  incompatible-artifact error;
+- changed payload bytes or edited metadata fail with a stale-artifact error.
 
 ## Versioning
 
@@ -134,8 +153,8 @@ Classic ML versioning should account for:
 - dependency/provider version when it affects output.
 
 The `ml:` block is included in `code_version`, which covers static config. The
-built-in feature executors also record a training input hash and artifact
-version in `run_results.json`.
+built-in feature executors also record a training input hash, config hash,
+runtime versions, payload hash, and artifact version in `run_results.json`.
 
 ## Initial Examples
 

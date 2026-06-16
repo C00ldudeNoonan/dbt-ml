@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import math
 import re
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +17,10 @@ from .adapters import WarehouseAdapter
 from .config.model import MLConfig, ModelConfig
 from .config.project import ProjectConfig
 from .dag import parse_ref
+from .versioning import compute_code_version
 
+ARTIFACT_SCHEMA_VERSION = 1
+ARTIFACT_REGISTRY_FILENAME = "registry.json"
 _TOKEN_RE = re.compile(r"\w+")
 _FEATURE_PROVIDERS = {"builtin.count", "builtin.tfidf", "builtin.hashing"}
 _ENGLISH_STOP_WORDS = {
@@ -71,6 +76,23 @@ class ClassicMLRun:
     artifact_version: str
     training_input: dict[str, Any]
     metrics: dict[str, Any]
+    artifact_metadata: dict[str, Any]
+
+
+class ClassicMLArtifactError(ValueError):
+    pass
+
+
+class MissingClassicMLArtifactError(ClassicMLArtifactError, FileNotFoundError):
+    pass
+
+
+class StaleClassicMLArtifactError(ClassicMLArtifactError):
+    pass
+
+
+class IncompatibleClassicMLArtifactError(ClassicMLArtifactError):
+    pass
 
 
 def run_classic_ml_model(
@@ -132,6 +154,12 @@ def _run_features(
     artifact_path = _artifact_path(ml, model, project, project_dir)
     rows = _source_rows(source_df, ml.text_field)
     training_input = _training_input(model.depends_on, rows)
+    code_version = compute_code_version(
+        extraction=None,
+        transform=None,
+        ml=ml,
+        project_dir=project_dir,
+    )
 
     if ml.mode in {"fit_transform", "fit"}:
         vectorizer = _fit_vectorizer(rows, provider, options)
@@ -142,10 +170,19 @@ def _run_features(
             training_input=training_input,
             vectorizer=vectorizer,
             options=options,
+            code_version=code_version,
         )
         _write_artifact(artifact_path, metadata, vectorizer)
+        metadata = _read_metadata(artifact_path)
+        _write_artifact_registry(
+            project=project,
+            project_dir=project_dir,
+            model=model,
+            artifact_path=artifact_path,
+            metadata=metadata,
+        )
     elif ml.mode in {"predict", "load_pretrained"}:
-        metadata, vectorizer = _read_artifact(artifact_path, provider)
+        metadata, vectorizer = _read_artifact(artifact_path, provider, ml)
         options = _text_options(vectorizer["options"])
     else:
         raise ValueError(f"Unsupported ML mode: {ml.mode}")
@@ -180,6 +217,7 @@ def _run_features(
         artifact_version=str(metadata["artifact_version"]),
         training_input=metadata.get("training_input", training_input),
         metrics=metrics,
+        artifact_metadata=metadata,
     )
 
 
@@ -497,15 +535,29 @@ def _metadata(
     training_input: dict[str, Any],
     vectorizer: dict[str, Any],
     options: TextOptions,
+    code_version: str,
 ) -> dict[str, Any]:
     files = ["metadata.json"]
     if provider != "builtin.hashing":
         files.append("vocabulary.json")
-    base = {
+    return {
+        "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "artifact_type": "classic_ml",
         "model_name": model.name,
         "task": ml.task,
         "provider": provider,
         "mode": ml.mode,
+        "text_field": ml.text_field,
+        "code_version": code_version,
+        "config_hash": _hash_json(
+            {
+                "task": ml.task,
+                "provider": provider,
+                "text_field": ml.text_field,
+                "options": _serializable_options(options),
+            }
+        ),
+        "runtime": _runtime_versions(provider),
         "training_input": training_input,
         "metrics": {
             "row_count": training_input["row_count"],
@@ -517,8 +569,6 @@ def _metadata(
         "vocabulary_hash": _hash_json(vectorizer["vocabulary"]),
         "idf_hash": _hash_json(vectorizer["idf"]),
     }
-    base["artifact_version"] = _hash_json(base)
-    return base
 
 
 def _write_artifact(
@@ -527,54 +577,215 @@ def _write_artifact(
     vectorizer: dict[str, Any],
 ) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    (path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
-    if vectorizer["provider"] == "builtin.hashing":
-        return
-    (path / "vocabulary.json").write_text(
-        json.dumps(
-            {
-                "provider": vectorizer["provider"],
-                "terms": vectorizer["vocabulary"],
-                "idf": vectorizer["idf"],
-                "options": vectorizer["options"],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
+    payload_files = _write_artifact_payload(path, vectorizer)
+    metadata["files"] = ["metadata.json", *payload_files]
+    metadata["artifact_files_hash"] = _artifact_files_hash(path, payload_files, vectorizer)
+    metadata["artifact_version"] = _artifact_version(metadata)
+    _write_metadata(path, metadata)
 
 
 def _read_artifact(
     path: Path,
     provider: FeatureProvider,
+    ml: MLConfig,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    metadata_path = path / "metadata.json"
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"Missing classic ML artifact at {path}")
-    metadata = json.loads(metadata_path.read_text())
+    metadata = _read_metadata(path)
+    _validate_metadata(metadata, path, provider, ml)
     if provider == "builtin.hashing":
-        return metadata, {
+        vectorizer = {
             "provider": provider,
             "vocabulary": [],
             "idf": {},
             "n_features": metadata["metrics"]["feature_count"],
             "options": metadata["options"],
         }
+        _validate_artifact_payload(metadata, path, vectorizer)
+        return metadata, vectorizer
 
     vocab_path = path / "vocabulary.json"
     if not vocab_path.exists():
-        raise FileNotFoundError(f"Missing classic ML vocabulary artifact at {path}")
+        raise MissingClassicMLArtifactError(
+            f"missing artifact payload 'vocabulary.json' at {path}; "
+            "run fit or fit_transform again"
+        )
     vocab_payload = json.loads(vocab_path.read_text())
-    return (
-        metadata,
-        {
-            "provider": provider,
-            "vocabulary": [str(t) for t in vocab_payload["terms"]],
-            "idf": {str(k): float(v) for k, v in vocab_payload["idf"].items()},
-            "n_features": len(vocab_payload["terms"]),
-            "options": vocab_payload["options"],
-        },
-    )
+    vectorizer = {
+        "provider": provider,
+        "vocabulary": [str(t) for t in vocab_payload["terms"]],
+        "idf": {str(k): float(v) for k, v in vocab_payload["idf"].items()},
+        "n_features": len(vocab_payload["terms"]),
+        "options": vocab_payload["options"],
+    }
+    _validate_artifact_payload(metadata, path, vectorizer)
+    return metadata, vectorizer
+
+
+def _write_artifact_payload(path: Path, vectorizer: dict[str, Any]) -> list[str]:
+    if vectorizer["provider"] == "builtin.hashing":
+        return []
+    payload = {
+        "provider": vectorizer["provider"],
+        "terms": vectorizer["vocabulary"],
+        "idf": vectorizer["idf"],
+        "options": vectorizer["options"],
+    }
+    (path / "vocabulary.json").write_text(json.dumps(payload, indent=2, sort_keys=True))
+    return ["vocabulary.json"]
+
+
+def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
+    (path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
+
+
+def _read_metadata(path: Path) -> dict[str, Any]:
+    metadata_path = path / "metadata.json"
+    if not metadata_path.exists():
+        raise MissingClassicMLArtifactError(
+            f"missing artifact metadata at {metadata_path}; run fit or fit_transform first"
+        )
+    return cast(dict[str, Any], json.loads(metadata_path.read_text()))
+
+
+def _validate_metadata(
+    metadata: dict[str, Any],
+    path: Path,
+    provider: FeatureProvider,
+    ml: MLConfig,
+) -> None:
+    schema_version = metadata.get("artifact_schema_version")
+    if schema_version != ARTIFACT_SCHEMA_VERSION:
+        raise IncompatibleClassicMLArtifactError(
+            f"incompatible artifact schema at {path}: expected "
+            f"{ARTIFACT_SCHEMA_VERSION}, found {schema_version!r}"
+        )
+    if metadata.get("artifact_type") != "classic_ml":
+        raise IncompatibleClassicMLArtifactError(
+            f"incompatible artifact type at {path}: {metadata.get('artifact_type')!r}"
+        )
+    if metadata.get("provider") != provider:
+        raise IncompatibleClassicMLArtifactError(
+            f"incompatible artifact provider at {path}: expected {provider}, "
+            f"found {metadata.get('provider')!r}"
+        )
+    if metadata.get("task") != ml.task:
+        raise IncompatibleClassicMLArtifactError(
+            f"incompatible artifact task at {path}: expected {ml.task}, "
+            f"found {metadata.get('task')!r}"
+        )
+    expected_version = _artifact_version(metadata)
+    if metadata.get("artifact_version") != expected_version:
+        raise StaleClassicMLArtifactError(
+            f"stale artifact metadata at {path}: artifact_version does not match metadata"
+        )
+
+
+def _validate_artifact_payload(
+    metadata: dict[str, Any],
+    path: Path,
+    vectorizer: dict[str, Any],
+) -> None:
+    payload_files = [f for f in metadata.get("files", []) if f != "metadata.json"]
+    actual_hash = _artifact_files_hash(path, payload_files, vectorizer)
+    expected_hash = metadata.get("artifact_files_hash")
+    if actual_hash != expected_hash:
+        raise StaleClassicMLArtifactError(
+            f"stale artifact payload at {path}: artifact_files_hash does not match files"
+        )
+
+
+def _artifact_version(metadata: dict[str, Any]) -> str:
+    payload = {
+        key: value for key, value in metadata.items()
+        if key != "artifact_version"
+    }
+    return _hash_json(payload)
+
+
+def _artifact_files_hash(
+    path: Path,
+    payload_files: list[str],
+    vectorizer: dict[str, Any],
+) -> str:
+    if not payload_files:
+        return _hash_json(
+            {
+                "provider": vectorizer["provider"],
+                "options": vectorizer["options"],
+                "n_features": vectorizer["n_features"],
+            }
+        )
+    h = hashlib.blake2b(digest_size=8)
+    for filename in sorted(payload_files):
+        file_path = path / filename
+        if not file_path.exists():
+            raise MissingClassicMLArtifactError(
+                f"missing artifact payload '{filename}' at {path}; "
+                "run fit or fit_transform again"
+            )
+        h.update(filename.encode())
+        h.update(file_path.read_bytes())
+    return h.hexdigest()
+
+
+def _write_artifact_registry(
+    *,
+    project: ProjectConfig,
+    project_dir: Path,
+    model: ModelConfig,
+    artifact_path: Path,
+    metadata: dict[str, Any],
+) -> None:
+    registry_dir = project_dir / project.target_path / "artifacts"
+    registry_dir.mkdir(parents=True, exist_ok=True)
+    registry_path = registry_dir / ARTIFACT_REGISTRY_FILENAME
+    registry = _read_artifact_registry(registry_path)
+    registry["artifacts"][model.name] = {
+        "model_name": model.name,
+        "artifact_path": _display_path(artifact_path, project_dir),
+        "artifact_version": metadata["artifact_version"],
+        "provider": metadata["provider"],
+        "task": metadata["task"],
+        "code_version": metadata["code_version"],
+        "config_hash": metadata["config_hash"],
+        "artifact_files_hash": metadata["artifact_files_hash"],
+        "training_input": metadata["training_input"],
+        "metrics": metadata["metrics"],
+    }
+    registry_path.write_text(json.dumps(registry, indent=2, sort_keys=True))
+
+
+def _read_artifact_registry(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"artifact_schema_version": ARTIFACT_SCHEMA_VERSION, "artifacts": {}}
+    registry = json.loads(path.read_text())
+    if not isinstance(registry, dict):
+        return {"artifact_schema_version": ARTIFACT_SCHEMA_VERSION, "artifacts": {}}
+    registry.setdefault("artifact_schema_version", ARTIFACT_SCHEMA_VERSION)
+    registry.setdefault("artifacts", {})
+    return cast(dict[str, Any], registry)
+
+
+def _display_path(path: Path, project_dir: Path) -> str:
+    try:
+        return path.relative_to(project_dir).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _runtime_versions(provider: FeatureProvider) -> dict[str, str]:
+    return {
+        "python": sys.version.split()[0],
+        "dbt_ml": _package_version("dbt-ml"),
+        "polars": _package_version("polars"),
+        "provider": provider,
+    }
+
+
+def _package_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def _serializable_options(options: TextOptions) -> dict[str, Any]:
