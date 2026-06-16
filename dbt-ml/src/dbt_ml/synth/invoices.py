@@ -31,7 +31,7 @@ def generate_invoices(count: int, output_dir: Path, seed: int = 42) -> list[Path
 
 def _make_invoice(fake: Faker, rng: random.Random, index: int) -> dict[str, Any]:
     line_count = rng.randint(1, 6)
-    line_items = [
+    line_items: list[dict[str, Any]] = [
         {
             "description": fake.bs().title(),
             "qty": rng.randint(1, 10),

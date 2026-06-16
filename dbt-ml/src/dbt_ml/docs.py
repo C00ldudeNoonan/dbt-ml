@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -117,4 +117,4 @@ def _read_run_results(target_dir: Path) -> list[dict[str, Any]]:
     p = target_dir / RUN_RESULTS_FILENAME
     if not p.exists():
         return []
-    return json.loads(p.read_text()).get("results", [])
+    return cast(list[dict[str, Any]], json.loads(p.read_text()).get("results", []))

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import duckdb
 import polars as pl
@@ -109,13 +109,13 @@ class DuckDBAdapter(WarehouseAdapter):
                 f"SELECT * FROM dbt_ml_staging LIMIT 0"
             )
             if key_col in df.columns:
-                ids = df[key_col].to_list()
-                if ids:
-                    placeholders = ",".join(["?"] * len(ids))
-                    self.connection.execute(
-                        f'DELETE FROM {full} WHERE "{key_col}" IN ({placeholders})',
-                        ids,
-                    )
+                self.connection.execute(
+                    f"""
+                    DELETE FROM {full} AS target
+                    USING dbt_ml_staging AS source
+                    WHERE target."{key_col}" = source."{key_col}"
+                    """
+                )
             self.connection.execute(f"INSERT INTO {full} SELECT * FROM dbt_ml_staging")
         finally:
             self.connection.unregister("dbt_ml_staging")
@@ -138,8 +138,8 @@ class DuckDBAdapter(WarehouseAdapter):
         row = self.execute(sql, params).fetchone()
         return row[0] if row else None
 
-    def rows(self, sql: str, params: list[Any] | None = None) -> list[tuple]:
-        return self.execute(sql, params).fetchall()
+    def rows(self, sql: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:
+        return cast(list[tuple[Any, ...]], self.execute(sql, params).fetchall())
 
     def clean(self) -> str:
         """Delete the DuckDB file. Closes the connection if open."""

@@ -7,9 +7,11 @@ from typing import Any
 
 from .config.model import ExtractionConfig, MLConfig, TransformConfig
 
+_HASH_CHUNK_SIZE = 1024 * 1024
+
 
 def compute_content_hash(path: Path) -> str:
-    return hashlib.blake2b(path.read_bytes(), digest_size=8).hexdigest()
+    return _hash_file(path)
 
 
 def compute_document_id(scope: str, relative_path: str) -> str:
@@ -31,9 +33,7 @@ def compute_code_version(
     if transform and transform.module:
         module_file = resolve_module_file(transform.module, project_dir)
         if module_file.exists():
-            payload["transform_code_hash"] = hashlib.blake2b(
-                module_file.read_bytes(), digest_size=8
-            ).hexdigest()
+            payload["transform_code_hash"] = _hash_file(module_file)
         else:
             payload["transform_code_hash"] = "missing"
 
@@ -46,3 +46,11 @@ def resolve_module_file(module: str, project_dir: Path) -> Path:
     relative to the project directory."""
     parts = module.split(".")
     return project_dir / Path(*parts).with_suffix(".py")
+
+
+def _hash_file(path: Path) -> str:
+    h = hashlib.blake2b(digest_size=8)
+    with path.open("rb") as f:
+        while chunk := f.read(_HASH_CHUNK_SIZE):
+            h.update(chunk)
+    return h.hexdigest()
