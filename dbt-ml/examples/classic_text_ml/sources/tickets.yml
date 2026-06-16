@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: support_tickets
+    description: "Raw support tickets for classic text ML examples"
+    path: data/tickets
+    file_pattern: "*.json"
+    recursive: true
+    tags: [tickets, classic_ml]

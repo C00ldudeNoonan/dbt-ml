@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: ticket_tfidf
+    description: "Planned TF-IDF feature table for ticket summaries"
+    depends_on: [ref('raw_tickets')]
+    ml:
+      task: features
+      mode: fit_transform
+      provider: builtin.tfidf
+      text_field: summary
+      artifact:
+        path: target/artifacts/ticket_tfidf
+      metrics:
+        - row_count
+        - vocabulary_size
+      options:
+        ngram_range: [1, 2]
+        min_df: 1
+        max_features: 50000
+    materialization: full
+    tags: [features, classic_ml]

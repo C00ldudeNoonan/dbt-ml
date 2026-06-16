@@ -11,6 +11,7 @@ import polars as pl
 
 from .adapters import WarehouseAdapter, create_adapter
 from .backends import ExtractionResult, get_backend
+from .classic_ml import run_classic_ml_model
 from .config import load_project
 from .config.model import ModelConfig
 from .config.project import ProjectConfig
@@ -49,6 +50,10 @@ class ModelRunResult:
     rows_written: int = 0
     duration_seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
+    artifact_path: str | None = None
+    artifact_version: str | None = None
+    training_input: dict[str, Any] | None = None
+    metrics: dict[str, Any] = field(default_factory=dict)
 
 
 def run_project(
@@ -136,6 +141,13 @@ def _run_model(
             full_refresh=full_refresh,
             threads=threads,
         )
+    elif model.ml is not None:
+        result = _run_ml_model(
+            model=model,
+            project=project,
+            project_dir=project_dir,
+            adapter=adapter,
+        )
     elif model.transform is not None:
         result = _run_transform_model(
             model=model,
@@ -145,7 +157,7 @@ def _run_model(
         )
     else:
         raise RunError(
-            f"Model '{model.name}' has neither extraction nor transform configured"
+            f"Model '{model.name}' has no extraction, transform, or ml block configured"
         )
     result.duration_seconds = round(time.monotonic() - start, 3)
     return result
@@ -323,6 +335,37 @@ def _run_transform_model(
         materialization=model.materialization,
         kind="transform",
         rows_written=output.height,
+    )
+
+
+def _run_ml_model(
+    *,
+    model: ModelConfig,
+    project: ProjectConfig,
+    project_dir: Path,
+    adapter: WarehouseAdapter,
+) -> ModelRunResult:
+    assert model.ml is not None
+    try:
+        output = run_classic_ml_model(
+            model=model,
+            project=project,
+            project_dir=project_dir,
+            adapter=adapter,
+        )
+    except Exception as e:
+        raise RunError(f"ML model '{model.name}' failed: {e}") from e
+
+    rows_written = adapter.materialize_full(model.name, output.df)
+    return ModelRunResult(
+        model_name=model.name,
+        materialization=model.materialization,
+        kind="ml",
+        rows_written=rows_written,
+        artifact_path=str(output.artifact_path),
+        artifact_version=output.artifact_version,
+        training_input=output.training_input,
+        metrics=output.metrics,
     )
 
 

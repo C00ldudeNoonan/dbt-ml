@@ -48,6 +48,69 @@ def test_manifest_has_code_versions(fresh_project: Path) -> None:
     assert all(isinstance(v, str) and len(v) == 16 for v in versions.values())
 
 
+def test_manifest_emits_ml_models(tmp_path: Path) -> None:
+    (tmp_path / "dbt_ml_project.yml").write_text(
+        "\n".join(
+            [
+                "name: classic_ml_project",
+                "version: '0.1.0'",
+                "source-paths: ['sources']",
+                "model-paths: ['models']",
+            ]
+        )
+    )
+    (tmp_path / "sources").mkdir()
+    (tmp_path / "sources" / "tickets.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "sources:",
+                "  - name: tickets",
+                "    path: data/tickets",
+            ]
+        )
+    )
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "raw_tickets.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: raw_tickets",
+                "    source: ref('tickets')",
+                "    extraction:",
+                "      backend: json",
+                "      options:",
+                "        fields: [body]",
+            ]
+        )
+    )
+    (tmp_path / "models" / "ticket_features.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_tfidf",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: features",
+                "      provider: builtin.tfidf",
+                "      text_field: body",
+                "      artifact:",
+                "        path: target/artifacts/ticket_tfidf",
+            ]
+        )
+    )
+
+    manifest = build_manifest(tmp_path)
+    model = next(m for m in manifest["models"] if m["name"] == "ticket_tfidf")
+    assert model["kind"] == "ml"
+    assert model["ml"]["task"] == "features"
+    assert model["ml"]["provider"] == "builtin.tfidf"
+    assert model["ml"]["artifact"]["path"] == "target/artifacts/ticket_tfidf"
+    assert isinstance(model["code_version"], str)
+
+
 def test_write_manifest_creates_file(fresh_project: Path) -> None:
     path = write_manifest(fresh_project)
     assert path.exists()

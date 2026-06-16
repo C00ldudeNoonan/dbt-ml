@@ -103,6 +103,8 @@ def write_run_results(project_dir: Path, results: list[ModelRunResult]) -> Path:
 def _model_dict(model: ModelConfig, project_dir: Path) -> dict[str, Any]:
     if model.extraction is not None:
         kind = "extraction"
+    elif model.ml is not None:
+        kind = "ml"
     elif model.transform is not None:
         kind = "transform"
     else:
@@ -118,11 +120,13 @@ def _model_dict(model: ModelConfig, project_dir: Path) -> dict[str, Any]:
         "depends_on": model.depends_on or [],
         "extraction": model.extraction.model_dump() if model.extraction else None,
         "transform": model.transform.model_dump() if model.transform else None,
+        "ml": model.ml.model_dump(mode="json") if model.ml else None,
         "fields": [f.model_dump() for f in model.fields],
         "tests": model.tests,
         "code_version": compute_code_version(
             extraction=model.extraction,
             transform=model.transform,
+            ml=model.ml,
             project_dir=project_dir,
         ),
     }
