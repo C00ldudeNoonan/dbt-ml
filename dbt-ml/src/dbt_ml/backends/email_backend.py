@@ -82,10 +82,15 @@ def _walk_parts(msg: Message) -> tuple[str | None, str | None]:
             continue
         if payload is None:
             continue
-        try:
-            decoded = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-        except (LookupError, ValueError):
-            decoded = payload.decode("utf-8", errors="replace")
+        if isinstance(payload, str):
+            decoded = payload
+        elif isinstance(payload, bytes):
+            try:
+                decoded = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            except (LookupError, ValueError):
+                decoded = payload.decode("utf-8", errors="replace")
+        else:
+            continue
         if ctype == "text/plain" and text_body is None:
             text_body = decoded
         elif ctype == "text/html" and html_body is None:

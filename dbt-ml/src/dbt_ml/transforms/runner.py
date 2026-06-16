@@ -31,7 +31,7 @@ class TransformContext:
 
 
 class TransformFn(Protocol):
-    def __call__(self, deps: dict[str, pl.DataFrame]) -> pl.DataFrame: ...
+    def __call__(self, deps: dict[str, pl.DataFrame], *args: Any) -> pl.DataFrame: ...
 
 
 def load_transform(module_path: str, project_dir: Path) -> TransformFn:

@@ -59,7 +59,11 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["src/dbt_ml", "tests"]
+files = ["src/dbt_ml"]
+
+[[tool.mypy.overrides]]
+module = ["datasketch", "langdetect"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -131,7 +131,7 @@ def _default_call_api(
         "description": "Return the extracted structured fields from the document.",
         "input_schema": _input_schema(fields_spec),
     }
-    resp = client.messages.create(
+    resp = client.messages.create(  # type: ignore[call-overload]
         model=model,
         max_tokens=2048,
         system=[

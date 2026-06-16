@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from typing import Any
 
 from faker import Faker
 from fpdf import FPDF
@@ -31,10 +32,10 @@ def generate_invoice_pdfs(count: int, output_dir: Path, seed: int = 42) -> list[
     return paths
 
 
-def _make_invoice(fake: Faker, rng: random.Random, index: int) -> dict:
+def _make_invoice(fake: Faker, rng: random.Random, index: int) -> dict[str, Any]:
     vendor = fake.company()
     billed_to = fake.company()
-    line_items = [
+    line_items: list[dict[str, Any]] = [
         {
             "description": fake.bs().title(),
             "qty": rng.randint(1, 5),
@@ -55,7 +56,7 @@ def _make_invoice(fake: Faker, rng: random.Random, index: int) -> dict:
     }
 
 
-def _render(inv: dict) -> FPDF:
+def _render(inv: dict[str, Any]) -> FPDF:
     pdf = FPDF()
     pdf.add_page()
 

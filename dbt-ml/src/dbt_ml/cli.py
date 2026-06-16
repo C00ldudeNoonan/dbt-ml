@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -10,6 +11,7 @@ from .adapters import AdapterError, create_adapter
 from .checks import run_project_tests
 from .config import ConfigError, load_project
 from .config.model import ModelConfig
+from .config.project import ProjectConfig
 from .config.source import SourceConfig
 from .dag import DAGError, ProjectDAG, SelectionError, parse_ref
 from .dbt_export import write_dbt_sources
@@ -89,8 +91,8 @@ def compile(ctx: click.Context) -> None:
 
 
 def _compile_warnings(
-    project,
-    models,
+    project: ProjectConfig,
+    models: list[ModelConfig],
     project_dir: Path,
     target: str | None,
     profiles_dir: Path | None,
@@ -122,7 +124,10 @@ def _compile_warnings(
     return out
 
 
-_SEEDERS_BY_BACKEND = {
+Seeder = Callable[[int, Path, int], list[Path]]
+
+
+_SEEDERS_BY_BACKEND: dict[str, Seeder] = {
     "json": generate_invoices,
     "markdown": generate_posts,
     "llm": generate_invoice_texts,
@@ -131,7 +136,7 @@ _SEEDERS_BY_BACKEND = {
     "email": generate_support_emails,
 }
 
-_SEEDERS_BY_TYPE = {
+_SEEDERS_BY_TYPE: dict[str, Seeder] = {
     "invoices": generate_invoices,
     "posts": generate_posts,
     "invoice_texts": generate_invoice_texts,
@@ -263,16 +268,17 @@ def seed(
         label = data_type
     else:
         backend_name = _backend_for_source(source, models)
-        seeder = _SEEDERS_BY_BACKEND.get(backend_name)
-        if seeder is None:
+        backend_seeder = _SEEDERS_BY_BACKEND.get(backend_name)
+        if backend_seeder is None:
             raise click.ClickException(
                 f"No default seeder for backend '{backend_name}'. "
                 f"Pass --type explicitly. Available: {sorted(_SEEDERS_BY_TYPE)}"
             )
+        seeder = backend_seeder
         label = backend_name
 
     output_dir = (project_dir / source.path).resolve()
-    paths = seeder(count, output_dir, seed=seed)
+    paths = seeder(count, output_dir, seed)
     click.echo(f"Wrote {len(paths)} {label} documents to {output_dir}")
 
 
@@ -563,14 +569,14 @@ def clean(ctx: click.Context) -> None:
     click.echo(f"Removed {path}")
 
 
-def _load(project_dir: Path):  # type: ignore[no-untyped-def]
+def _load(project_dir: Path) -> tuple[ProjectConfig, list[SourceConfig], list[ModelConfig]]:
     try:
         return load_project(project_dir)
     except ConfigError as e:
         raise click.ClickException(str(e)) from e
 
 
-def _build_dag(sources, models):  # type: ignore[no-untyped-def]
+def _build_dag(sources: list[SourceConfig], models: list[ModelConfig]) -> ProjectDAG:
     try:
         return ProjectDAG(sources, models)
     except DAGError as e:

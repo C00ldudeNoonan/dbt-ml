@@ -57,7 +57,7 @@ class PdfBackend(BaseBackend):
         if include_page_count:
             fields["page_count"] = len(pages)
         if include_metadata:
-            md = reader.metadata or {}
+            md: dict[Any, Any] = dict(reader.metadata or {})
             fields["pdf_metadata"] = {str(k): str(v) for k, v in md.items()}
 
         return ExtractionResult(fields=fields, warnings=warnings)
