@@ -209,6 +209,28 @@ def test_run_with_threads_produces_same_results(fresh_project: Path) -> None:
     assert rows[0][0] == 20
 
 
+def test_threaded_run_parallelizes_independent_branches(fresh_project: Path) -> None:
+    """invoice_summary and monthly_totals are independent siblings of raw_invoices;
+    running the DAG with threads>1 must produce the same tables as a serial run."""
+    generate_invoices(20, fresh_project / "data" / "invoices", seed=4)
+
+    serial = run_project(fresh_project)
+    serial_rows = {r.model_name: r.rows_written for r in serial}
+
+    clean_project(fresh_project)
+    parallel = run_project(fresh_project, threads=4)
+    parallel_rows = {r.model_name: r.rows_written for r in parallel}
+
+    assert parallel_rows == serial_rows
+    assert set(parallel_rows) == {"raw_invoices", "invoice_summary", "monthly_totals"}
+
+    db = fresh_project / "target" / "dbt_ml.duckdb"
+    summary = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.invoice_summary')
+    monthly = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.monthly_totals')
+    assert summary[0][0] > 0
+    assert monthly[0][0] > 0
+
+
 def test_clean_removes_duckdb(fresh_project: Path) -> None:
     invoices_dir = fresh_project / "data" / "invoices"
     generate_invoices(2, invoices_dir, seed=1)

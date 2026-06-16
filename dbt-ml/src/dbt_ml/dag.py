@@ -95,6 +95,26 @@ class ProjectDAG:
     def execution_order(self) -> list[str]:
         return [name for name in self._sorted if self.nodes[name].kind == NodeKind.MODEL]
 
+    def parallel_batches(self, names: list[str]) -> list[list[str]]:
+        """Group `names` into topological generations: each batch may run
+        concurrently, and every batch depends only on earlier ones. Dependencies
+        on nodes outside `names` (sources, unselected models) are ignored — those
+        are assumed already satisfied. Within a batch, order follows the global
+        topological order for deterministic output.
+        """
+        name_set = set(names)
+        graph = {n: (self.predecessors[n] & name_set) for n in names}
+        order_index = {n: i for i, n in enumerate(self._sorted)}
+        ts = TopologicalSorter(graph)
+        ts.prepare()
+        batches: list[list[str]] = []
+        while ts.is_active():
+            ready = sorted(ts.get_ready(), key=lambda n: order_index[n])
+            batches.append(list(ready))
+            for node in ready:
+                ts.done(node)
+        return batches
+
     def select_models(
         self, *, select: str | None = None, exclude: str | None = None
     ) -> list[str]:
