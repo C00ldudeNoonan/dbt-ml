@@ -121,6 +121,17 @@ class DuckDBAdapter(WarehouseAdapter):
             self.connection.unregister("dbt_ml_staging")
         return df.height
 
+    def delete_rows(self, table: str, *, key_col: str, keys: list[str]) -> int:
+        if not keys or table not in self.list_tables():
+            return 0
+        full = self.table_ref(table)
+        placeholders = ", ".join("?" for _ in keys)
+        cursor = self.connection.execute(
+            f'DELETE FROM {full} WHERE "{key_col}" IN ({placeholders})', keys
+        )
+        deleted = cursor.fetchone()
+        return int(deleted[0]) if deleted else 0
+
     def drop_table(self, table: str) -> None:
         self.connection.execute(f"DROP TABLE IF EXISTS {self.table_ref(table)}")
 
@@ -191,6 +202,16 @@ class DuckDBAdapter(WarehouseAdapter):
         self.connection.execute(
             f"DELETE FROM {self.schema_ref}.dbt_ml_state WHERE model_name = ?",
             [model_name],
+        )
+
+    def delete_state(self, model_name: str, document_ids: list[str]) -> None:
+        if not document_ids:
+            return
+        placeholders = ", ".join("?" for _ in document_ids)
+        self.connection.execute(
+            f"DELETE FROM {self.schema_ref}.dbt_ml_state "
+            f"WHERE model_name = ? AND document_id IN ({placeholders})",
+            [model_name, *document_ids],
         )
 
     # ─── internals ───────────────────────────────────────────────────────

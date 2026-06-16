@@ -32,13 +32,18 @@ def _query(db_path: Path, sql: str) -> list[tuple]:
         con.close()
 
 
-def _write_ticket(path: Path, ticket_id: str, summary: str) -> None:
+def _write_ticket(
+    path: Path,
+    ticket_id: str,
+    summary: str,
+    priority: str = "medium",
+) -> None:
     path.write_text(
         json.dumps(
             {
                 "ticket_id": ticket_id,
                 "summary": summary,
-                "priority": "medium",
+                "priority": priority,
             }
         )
     )
@@ -97,6 +102,36 @@ def test_changed_doc_is_reprocessed(fresh_project: Path) -> None:
     assert rows[0][0] == "MUTATED_VENDOR"
 
 
+def test_removed_doc_is_pruned_on_incremental(fresh_project: Path) -> None:
+    invoices_dir = fresh_project / "data" / "invoices"
+    generate_invoices(5, invoices_dir, seed=1)
+    run_project(fresh_project)
+
+    (invoices_dir / "invoice_00002.json").unlink()
+
+    results = run_project(fresh_project)
+    raw = next(r for r in results if r.model_name == "raw_invoices")
+    assert raw.documents_processed == 0
+    assert raw.documents_skipped == 4
+    assert raw.documents_deleted == 1
+
+    db = fresh_project / "target" / "dbt_ml.duckdb"
+    rows = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.raw_invoices')
+    assert rows[0][0] == 4
+    gone = _query(
+        db,
+        'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.raw_invoices '
+        "WHERE source_path = 'invoice_00002.json'",
+    )
+    assert gone[0][0] == 0
+    state = _query(
+        db,
+        "SELECT COUNT(*) FROM \"dbt_ml\".dbt_ml.dbt_ml_state "
+        "WHERE model_name = 'raw_invoices'",
+    )
+    assert state[0][0] == 4
+
+
 def test_full_refresh_reprocesses_all(fresh_project: Path) -> None:
     invoices_dir = fresh_project / "data" / "invoices"
     generate_invoices(5, invoices_dir, seed=1)
@@ -106,6 +141,16 @@ def test_full_refresh_reprocesses_all(fresh_project: Path) -> None:
     raw = next(r for r in results if r.model_name == "raw_invoices")
     assert raw.documents_processed == 5
     assert raw.documents_skipped == 0
+
+
+def test_incremental_transform_is_rejected(fresh_project: Path) -> None:
+    generate_invoices(3, fresh_project / "data" / "invoices", seed=1)
+    summary_yml = fresh_project / "models" / "invoice_summary.yml"
+    text = summary_yml.read_text()
+    summary_yml.write_text(text.replace("materialization: full", "materialization: incremental"))
+
+    with pytest.raises(RunError, match="only support `full`"):
+        run_project(fresh_project, select="invoice_summary")
 
 
 def test_transform_aggregates_dependency(fresh_project: Path) -> None:
@@ -167,6 +212,28 @@ def test_run_with_threads_produces_same_results(fresh_project: Path) -> None:
     db = fresh_project / "target" / "dbt_ml.duckdb"
     rows = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.raw_invoices')
     assert rows[0][0] == 20
+
+
+def test_threaded_run_parallelizes_independent_branches(fresh_project: Path) -> None:
+    """invoice_summary and monthly_totals are independent siblings of raw_invoices;
+    running the DAG with threads>1 must produce the same tables as a serial run."""
+    generate_invoices(20, fresh_project / "data" / "invoices", seed=4)
+
+    serial = run_project(fresh_project)
+    serial_rows = {r.model_name: r.rows_written for r in serial}
+
+    clean_project(fresh_project)
+    parallel = run_project(fresh_project, threads=4)
+    parallel_rows = {r.model_name: r.rows_written for r in parallel}
+
+    assert parallel_rows == serial_rows
+    assert set(parallel_rows) == {"raw_invoices", "invoice_summary", "monthly_totals"}
+
+    db = fresh_project / "target" / "dbt_ml.duckdb"
+    summary = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.invoice_summary')
+    monthly = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.monthly_totals')
+    assert summary[0][0] > 0
+    assert monthly[0][0] > 0
 
 
 def test_clean_removes_duckdb(fresh_project: Path) -> None:
@@ -275,6 +342,115 @@ def test_classic_ml_tfidf_fit_then_predict(tmp_path: Path) -> None:
     assert predict.rows_written > 0
     assert fit.artifact_version == predict.artifact_version
     assert fit.training_input == predict.training_input
+
+
+def test_classic_ml_naive_bayes_classifier_end_to_end(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    tickets = project / "data" / "tickets"
+    tickets.mkdir(parents=True)
+    _write_ticket(tickets / "ticket_1.json", "T-1", "urgent outage blocked", "high")
+    _write_ticket(tickets / "ticket_2.json", "T-2", "critical outage urgent", "high")
+    _write_ticket(tickets / "ticket_3.json", "T-3", "billing question invoice", "low")
+    _write_ticket(tickets / "ticket_4.json", "T-4", "password reset question", "low")
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_priority_classifier",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: classifier",
+                "      mode: fit_transform",
+                "      provider: builtin.naive_bayes",
+                "      text_field: summary",
+                "      label_field: priority",
+                "      options:",
+                "        min_df: 1",
+                "        alpha: 1.0",
+                "    materialization: full",
+            ]
+        )
+    )
+
+    results = run_project(project)
+    classifier = next(r for r in results if r.model_name == "ticket_priority_classifier")
+    assert classifier.kind == "ml"
+    assert classifier.rows_written == 4
+    assert classifier.artifact_version is not None
+    assert classifier.metrics["class_count"] == 2
+    assert classifier.metrics["vocabulary_size"] > 0
+    assert classifier.metrics["accuracy"] == 1.0
+    assert classifier.artifact_metadata is not None
+    assert classifier.artifact_metadata["provider"] == "builtin.naive_bayes"
+
+    artifact = project / "target" / "artifacts" / "ticket_priority_classifier"
+    assert (artifact / "metadata.json").exists()
+    assert (artifact / "model.json").exists()
+    model_payload = json.loads((artifact / "model.json").read_text())
+    assert model_payload["classes"] == ["high", "low"]
+
+    db = project / "target" / "dbt_ml.duckdb"
+    rows = _query(
+        db,
+        'SELECT COUNT(*), SUM(CASE WHEN correct THEN 1 ELSE 0 END) '
+        'FROM "dbt_ml".classic_text_ml.ticket_priority_classifier',
+    )
+    assert rows == [(4, 4)]
+
+
+def test_classic_ml_naive_bayes_fit_then_predict(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    tickets = project / "data" / "tickets"
+    tickets.mkdir(parents=True)
+    _write_ticket(tickets / "ticket_1.json", "T-1", "urgent outage blocked", "high")
+    _write_ticket(tickets / "ticket_2.json", "T-2", "critical outage urgent", "high")
+    _write_ticket(tickets / "ticket_3.json", "T-3", "billing question invoice", "low")
+    _write_ticket(tickets / "ticket_4.json", "T-4", "password reset question", "low")
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_priority_fit",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: classifier",
+                "      mode: fit",
+                "      provider: builtin.naive_bayes",
+                "      text_field: summary",
+                "      label_field: priority",
+                "      artifact:",
+                "        path: target/artifacts/ticket_priority",
+                "      options:",
+                "        min_df: 1",
+                "  - name: ticket_priority_predict",
+                "    depends_on: [ref('raw_tickets'), ref('ticket_priority_fit')]",
+                "    ml:",
+                "      task: classifier",
+                "      mode: predict",
+                "      provider: builtin.naive_bayes",
+                "      text_field: summary",
+                "      label_field: priority",
+                "      artifact:",
+                "        path: target/artifacts/ticket_priority",
+            ]
+        )
+    )
+
+    results = run_project(project)
+    by_name = {r.model_name: r for r in results}
+    fit = by_name["ticket_priority_fit"]
+    predict = by_name["ticket_priority_predict"]
+    assert fit.rows_written == 1
+    assert predict.rows_written == 4
+    assert fit.artifact_version == predict.artifact_version
+    assert fit.training_input == predict.training_input
+    assert predict.metrics["accuracy"] == 1.0
 
 
 def test_classic_ml_predict_missing_artifact_reports_lifecycle_error(tmp_path: Path) -> None:
