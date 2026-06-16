@@ -2,7 +2,8 @@
 
 Lookup order for the profiles file:
   1. The directory passed via `--profiles-dir` (CLI flag).
-  2. The directory named by the `DOCBT_PROFILES_DIR` env var.
+  2. The directory named by the `DBT_ML_PROFILES_DIR` env var
+     (`DOCBT_PROFILES_DIR` is honored as a deprecated alias).
   3. `<project_dir>/profiles.yml` (project-local; dbt-ml addition for portability).
   4. `~/.dbt_ml/profiles.yml` (dbt-style user-global location).
 
@@ -11,6 +12,7 @@ First hit wins.
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,9 +21,11 @@ import yaml
 from pydantic import ValidationError
 
 from .config.profile import LLMConfig, ProfileConfig, WarehouseConfig
-from .config.project import DuckDBConfig, ProjectConfig
+from .config.project import ProjectConfig
 
 PROFILES_FILENAME = "profiles.yml"
+PROFILES_DIR_ENV = "DBT_ML_PROFILES_DIR"
+LEGACY_PROFILES_DIR_ENV = "DOCBT_PROFILES_DIR"
 
 
 class ProfileError(Exception):
@@ -59,7 +63,7 @@ def resolve_profile(
         raise ProfileError(
             f"Project '{project.name}' references profile '{project.profile}' "
             f"but no profiles.yml was found. Looked in: "
-            f"--profiles-dir, $DOCBT_PROFILES_DIR, {project_dir}/profiles.yml, "
+            f"--profiles-dir, ${PROFILES_DIR_ENV}, {project_dir}/profiles.yml, "
             f"~/.dbt_ml/profiles.yml."
         )
 
@@ -112,11 +116,17 @@ def _absolutize_llm(llm: LLMConfig | None, project_dir: Path) -> LLMConfig | Non
 
 
 def _legacy_resolved(project: ProjectConfig) -> ResolvedProfile:
-    duckdb: DuckDBConfig = project.duckdb
+    warnings.warn(
+        f"Project '{project.name}' has no `profile:`, so dbt-ml is falling back to "
+        "the inline `duckdb:` block. This path is deprecated and will be removed; "
+        "declare a `profile:` and a profiles.yml `warehouse:` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     warehouse = WarehouseConfig(
         type="duckdb",
-        path=duckdb.path,
-        schema=duckdb.schema_name,
+        path=project.duckdb.path,
+        schema=project.duckdb.schema_name,
     )
     return ResolvedProfile(
         profile_name="<inline>",
@@ -127,13 +137,24 @@ def _legacy_resolved(project: ProjectConfig) -> ResolvedProfile:
     )
 
 
+def _legacy_env_dir() -> str | None:
+    value = os.environ.get(LEGACY_PROFILES_DIR_ENV)
+    if value:
+        warnings.warn(
+            f"${LEGACY_PROFILES_DIR_ENV} is deprecated; use ${PROFILES_DIR_ENV}.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+    return value
+
+
 def _discover_profiles_file(
     project_dir: Path, profiles_dir: Path | None
 ) -> Path | None:
     candidates: list[Path] = []
     if profiles_dir is not None:
         candidates.append(profiles_dir / PROFILES_FILENAME)
-    env_dir = os.environ.get("DOCBT_PROFILES_DIR")
+    env_dir = os.environ.get(PROFILES_DIR_ENV) or _legacy_env_dir()
     if env_dir:
         candidates.append(Path(env_dir) / PROFILES_FILENAME)
     candidates.append(project_dir / PROFILES_FILENAME)
