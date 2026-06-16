@@ -136,6 +136,12 @@ def _run_model(
             full_refresh=full_refresh,
             threads=threads,
         )
+    elif model.ml is not None:
+        raise RunError(
+            f"Model '{model.name}' uses `ml:`, which is parsed and emitted in "
+            "artifacts but not executable yet. Implement a classic ML executor "
+            "for this task before running the model."
+        )
     elif model.transform is not None:
         result = _run_transform_model(
             model=model,
@@ -145,7 +151,7 @@ def _run_model(
         )
     else:
         raise RunError(
-            f"Model '{model.name}' has neither extraction nor transform configured"
+            f"Model '{model.name}' has no extraction, transform, or ml block configured"
         )
     result.duration_seconds = round(time.monotonic() - start, 3)
     return result

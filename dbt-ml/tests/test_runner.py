@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from dbt_ml.runner import clean_project, run_project
+from dbt_ml.runner import RunError, clean_project, run_project
 from dbt_ml.synth import generate_invoices
 
 
@@ -165,3 +165,44 @@ def test_clean_removes_duckdb(fresh_project: Path) -> None:
 
     clean_project(fresh_project)
     assert not db.exists()
+
+
+def test_ml_model_reports_clear_execution_error(tmp_path: Path) -> None:
+    (tmp_path / "dbt_ml_project.yml").write_text(
+        "\n".join(
+            [
+                "name: classic_ml_project",
+                "version: '0.1.0'",
+                "source-paths: ['sources']",
+                "model-paths: ['models']",
+            ]
+        )
+    )
+    (tmp_path / "sources").mkdir()
+    (tmp_path / "sources" / "tickets.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "sources:",
+                "  - name: tickets",
+                "    path: data/tickets",
+            ]
+        )
+    )
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "ticket_features.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_tfidf",
+                "    ml:",
+                "      task: features",
+                "      provider: builtin.tfidf",
+                "      text_field: body",
+            ]
+        )
+    )
+
+    with pytest.raises(RunError, match="uses `ml:`"):
+        run_project(tmp_path)

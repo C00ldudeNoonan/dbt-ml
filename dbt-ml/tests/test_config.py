@@ -54,3 +54,60 @@ def test_invoice_summary_depends_on_raw(example_project_dir: Path) -> None:
     assert summary.depends_on == ["ref('raw_invoices')"]
     assert summary.transform is not None
     assert summary.transform.module == "transforms.summarize"
+
+
+def test_loads_classic_ml_model_config(tmp_path: Path) -> None:
+    (tmp_path / "dbt_ml_project.yml").write_text(
+        "\n".join(
+            [
+                "name: classic_ml_project",
+                "version: '0.1.0'",
+                "source-paths: ['sources']",
+                "model-paths: ['models']",
+            ]
+        )
+    )
+    (tmp_path / "sources").mkdir()
+    (tmp_path / "sources" / "tickets.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "sources:",
+                "  - name: tickets",
+                "    path: data/tickets",
+            ]
+        )
+    )
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "ticket_features.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_tfidf",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: features",
+                "      mode: fit_transform",
+                "      provider: builtin.tfidf",
+                "      text_field: body",
+                "      artifact:",
+                "        path: target/artifacts/ticket_tfidf",
+                "      metrics: [vocabulary_size]",
+                "      options:",
+                "        ngram_range: [1, 2]",
+                "        max_features: 50000",
+            ]
+        )
+    )
+
+    _, _, models = load_project(tmp_path)
+    ml_model = models[0]
+    assert ml_model.ml is not None
+    assert ml_model.ml.task == "features"
+    assert ml_model.ml.mode == "fit_transform"
+    assert ml_model.ml.provider == "builtin.tfidf"
+    assert ml_model.ml.text_field == "body"
+    assert ml_model.ml.artifact.path == Path("target/artifacts/ticket_tfidf")
+    assert ml_model.ml.metrics == ["vocabulary_size"]
+    assert ml_model.ml.options["max_features"] == 50000

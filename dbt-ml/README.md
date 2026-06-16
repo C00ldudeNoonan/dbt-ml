@@ -60,6 +60,7 @@ extraction, dbt handoff) is opt-in on top.
 | **Source**         | A glob over a folder. `*.pdf`, `*.json`, `*.html`, `*.md` — your choice.        |
 | **Extraction model** | One row per source file, produced by a backend (pdf, json, markdown, html, llm). |
 | **Transform model**  | A Python module returning a Polars DataFrame, depends on other models via `ref()`. |
+| **Classic ML model** | A planned `ml:` model for deterministic text/document ML: features, classifiers, clustering, topic models, NLP enrichment. |
 | **Materialization**  | `full` (always replace) or `incremental` (skip unchanged input on re-runs).      |
 | **Tests**          | `not_null`, `unique`, `min_rows`, custom Python — with `severity: warn` if you want.|
 | **Profile**        | Warehouse + LLM config, swappable per `--target dev|prod`. No credentials in models. |
@@ -190,6 +191,34 @@ python -m spacy download en_core_web_sm
 
 Without the model, calls into `redact_pii` raise a clear `PIIError` pointing
 at this command.
+
+## Classic text and document ML
+
+Classic ML is a first-class dbt-ml lane alongside LLM/RAG work. The v0.2 design
+adds an `ml:` model block for deterministic text and document workflows such as
+Count/TF-IDF/hashing features, supervised classification/regression,
+clustering, topic models, and NLP enrichment.
+
+```yaml
+- name: ticket_tfidf
+  depends_on: [ref('raw_tickets')]
+  ml:
+    task: features
+    mode: fit_transform
+    provider: builtin.tfidf
+    text_field: body
+    artifact:
+      path: target/artifacts/ticket_tfidf
+    metrics: [vocabulary_size]
+    options:
+      ngram_range: [1, 2]
+      max_features: 50000
+```
+
+The grammar is parsed and emitted into `manifest.json` now. Execution, artifact
+metadata, and built-in providers land incrementally in the classic ML issues,
+starting with feature extraction (#40) and artifact lifecycle (#44). See
+`docs/classic-ml.md` for the full design contract.
 
 ## Tests
 

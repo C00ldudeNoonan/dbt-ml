@@ -1,0 +1,8 @@
+classic_text_ml:
+  target: dev
+  outputs:
+    dev:
+      warehouse:
+        type: duckdb
+        path: ./target/dbt_ml.duckdb
+        schema: classic_text_ml
