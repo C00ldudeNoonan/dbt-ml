@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -7,6 +9,58 @@ from click.testing import CliRunner
 from dbt_ml.cli import cli
 from dbt_ml.runner import run_project
 from dbt_ml.synth import generate_invoices
+
+
+def _copy_example(tmp_path: Path, example_project_dir: Path) -> Path:
+    dst = tmp_path / "project"
+    shutil.copytree(
+        example_project_dir,
+        dst,
+        ignore=shutil.ignore_patterns("data", "target", "__pycache__"),
+    )
+    return dst
+
+
+def test_ls_lists_models(tmp_path: Path, example_project_dir: Path) -> None:
+    dst = _copy_example(tmp_path, example_project_dir)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--project-dir", str(dst), "ls"])
+    assert result.exit_code == 0, result.output
+    assert "raw_invoices" in result.output
+    assert "extraction" in result.output
+    assert "invoice_summary" in result.output
+    # sources are excluded by default
+    assert "vendor_invoices" not in result.output
+
+
+def test_ls_select_and_resource_type(tmp_path: Path, example_project_dir: Path) -> None:
+    dst = _copy_example(tmp_path, example_project_dir)
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["--project-dir", str(dst), "ls", "--select", "raw_invoices"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "raw_invoices" in result.output
+    assert "invoice_summary" not in result.output
+
+    src = runner.invoke(
+        cli, ["--project-dir", str(dst), "ls", "--resource-type", "source"]
+    )
+    assert src.exit_code == 0, src.output
+    assert "vendor_invoices" in src.output
+
+
+def test_ls_json_output(tmp_path: Path, example_project_dir: Path) -> None:
+    dst = _copy_example(tmp_path, example_project_dir)
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["--project-dir", str(dst), "ls", "--output", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    names = {row["name"] for row in payload}
+    assert "raw_invoices" in names
+    assert all(row["resource_type"] == "model" for row in payload)
 
 
 def test_init_creates_runnable_project(tmp_path: Path) -> None:

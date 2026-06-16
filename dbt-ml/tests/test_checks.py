@@ -87,6 +87,43 @@ def test_unique_composite(populated_db: WarehouseAdapter) -> None:
     assert results[0].passed
 
 
+def test_relationships_pass_and_fail(populated_db: WarehouseAdapter) -> None:
+    # parent 'items' has id in {1, 2, 3}; build two child tables referencing it.
+    populated_db.materialize_full(
+        "orders_ok", pl.DataFrame({"item_id": [1, 2, 3, None]})
+    )
+    populated_db.materialize_full(
+        "orders_bad", pl.DataFrame({"item_id": [1, 2, 99]})
+    )
+
+    ok = evaluate_test_spec(
+        {"relationships": {"column": "item_id", "to": "ref('items')", "field": "id"}},
+        model_name="orders_ok",
+        table_ref=populated_db.table_ref("orders_ok"),
+        adapter=populated_db,
+    )
+    assert ok[0].passed
+
+    bad = evaluate_test_spec(
+        {"relationships": {"column": "item_id", "to": "ref('items')", "field": "id"}},
+        model_name="orders_bad",
+        table_ref=populated_db.table_ref("orders_bad"),
+        adapter=populated_db,
+    )
+    assert not bad[0].passed
+    assert "missing from items.id" in bad[0].message
+
+
+def test_relationships_requires_to_and_field(populated_db: WarehouseAdapter) -> None:
+    with pytest.raises(UnknownTestError, match="relationships requires"):
+        evaluate_test_spec(
+            {"relationships": {"column": "item_id"}},
+            model_name="items",
+            table_ref=populated_db.table_ref("items"),
+            adapter=populated_db,
+        )
+
+
 def test_min_rows(populated_db: WarehouseAdapter) -> None:
     ref = populated_db.table_ref("items")
     ok = evaluate_test_spec(

@@ -19,6 +19,7 @@ SUPPORTED_TESTS = {
     "accepted_range",
     "null_rate",
     "grounded_in",
+    "relationships",
 }
 SUPPORTED_SEVERITIES = {"error", "warn"}
 
@@ -140,6 +141,8 @@ def _run_named_test(
         return [_null_rate(model_name, table_ref, adapter, arg)]
     if test_name == "grounded_in":
         return [_grounded_in(model_name, table_ref, adapter, arg)]
+    if test_name == "relationships":
+        return [_relationships(model_name, table_ref, adapter, arg)]
     raise UnknownTestError(
         f"Unknown test '{test_name}'. Supported: {sorted(SUPPORTED_TESTS)}"
     )
@@ -403,6 +406,46 @@ def _grounded_in(
                 f"{ungrounded}/{checked} '{value_col}' values not grounded "
                 f"in '{source_col}' ({method})"
             )
+        ),
+    )
+
+
+def _relationships(
+    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any
+) -> TestResult:
+    """Referential integrity: every non-null `column` value exists in the parent
+    model's `field` column.
+
+    options: column, to (ref of the parent model), field (parent column).
+    """
+    from ..dag import parse_ref
+
+    opts = _require_dict("relationships", arg)
+    column = opts["column"]
+    field = opts.get("field") or opts.get("to_field")
+    if not opts.get("to") or not field:
+        raise UnknownTestError(
+            "relationships requires 'column', 'to' (parent ref), and 'field' (parent column)"
+        )
+    parent_name = parse_ref(str(opts["to"]))
+    parent_ref = adapter.table_ref(parent_name)
+    bad = (
+        adapter.scalar(
+            f'SELECT COUNT(*) FROM {table_ref} '
+            f'WHERE "{column}" IS NOT NULL AND "{column}" NOT IN '
+            f'(SELECT "{field}" FROM {parent_ref} WHERE "{field}" IS NOT NULL)'
+        )
+        or 0
+    )
+    return TestResult(
+        test_name="relationships",
+        model_name=model_name,
+        column=column,
+        status="pass" if bad == 0 else "fail",
+        message=(
+            ""
+            if bad == 0
+            else f"{bad} '{column}' values missing from {parent_name}.{field}"
         ),
     )
 

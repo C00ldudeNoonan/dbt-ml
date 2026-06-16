@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from collections.abc import Callable
@@ -290,6 +291,86 @@ def graph(ctx: click.Context) -> None:
     _, sources, models = _load(project_dir)
     dag = _build_dag(sources, models)
     click.echo(dag.to_mermaid())
+
+
+@cli.command(name="ls")
+@click.option("--select", "select", default=None, help="Selector expression for models.")
+@click.option("--exclude", default=None, help="Selector expression for models to skip.")
+@click.option(
+    "--resource-type",
+    type=click.Choice(["model", "source", "all"], case_sensitive=False),
+    default="model",
+    show_default=True,
+    help="Which resources to list. Selectors apply to models.",
+)
+@click.option(
+    "--output",
+    type=click.Choice(["name", "json"], case_sensitive=False),
+    default="name",
+    show_default=True,
+    help="Output format.",
+)
+@click.pass_context
+def ls(
+    ctx: click.Context,
+    select: str | None,
+    exclude: str | None,
+    resource_type: str,
+    output: str,
+) -> None:
+    """List project resources (models/sources) matching a selector."""
+    project_dir: Path = ctx.obj["project_dir"]
+    _, sources, models = _load(project_dir)
+    dag = _build_dag(sources, models)
+    models_by_name = {m.name: m for m in models}
+
+    rows: list[dict[str, object]] = []
+    if resource_type in ("model", "all"):
+        try:
+            selected = dag.select_models(select=select, exclude=exclude)
+        except SelectionError as e:
+            raise click.ClickException(str(e)) from e
+        for name in selected:
+            model = models_by_name[name]
+            rows.append(
+                {
+                    "name": name,
+                    "resource_type": "model",
+                    "kind": _model_kind(model),
+                    "tags": sorted(model.tags),
+                }
+            )
+    if resource_type in ("source", "all"):
+        for s in sources:
+            rows.append(
+                {
+                    "name": s.name,
+                    "resource_type": "source",
+                    "kind": "source",
+                    "tags": sorted(s.tags),
+                }
+            )
+
+    if not rows:
+        click.echo("No resources matched.")
+        return
+
+    if output == "json":
+        click.echo(json.dumps(rows, indent=2))
+        return
+    for row in rows:
+        tags = ",".join(row["tags"]) if row["tags"] else "-"  # type: ignore[arg-type]
+        click.echo(f"{row['name']:<24}{row['resource_type']:<10}{row['kind']:<12}{tags}")
+
+
+def _model_kind(model: ModelConfig) -> str:
+    if model.extraction is not None:
+        return "extraction"
+    if model.ml is not None:
+        return "ml"
+    if model.transform is not None:
+        return "transform"
+    return "unknown"
 
 
 @cli.command()
