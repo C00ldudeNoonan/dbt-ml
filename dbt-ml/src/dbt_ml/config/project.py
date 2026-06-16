@@ -6,6 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class DuckDBConfig(BaseModel):
+    """Deprecated inline warehouse config used only when a project declares no
+    `profile:`. Prefer a profiles.yml `warehouse:` block; this is slated for
+    removal once the legacy no-profile path goes away."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     path: Path = Path("./target/dbt_ml.duckdb")

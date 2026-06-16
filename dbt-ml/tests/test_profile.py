@@ -72,7 +72,8 @@ def _write_profiles(
 def test_legacy_fallback_when_no_profile(tmp_path: Path) -> None:
     _write_project(tmp_path, inline_duckdb=True)
     project, _, _ = load_project(tmp_path)
-    resolved = resolve_profile(project, tmp_path)
+    with pytest.warns(DeprecationWarning, match="no `profile:`"):
+        resolved = resolve_profile(project, tmp_path)
     assert resolved.profile_name == "<inline>"
     assert resolved.warehouse.schema_name == "inline_schema"
 
@@ -155,9 +156,28 @@ def test_env_var_lookup(
     other_dir.mkdir()
     _write_profiles(other_dir)
 
-    monkeypatch.setenv("DOCBT_PROFILES_DIR", str(other_dir))
+    monkeypatch.setenv("DBT_ML_PROFILES_DIR", str(other_dir))
     project, _, _ = load_project(project_dir)
     resolved = resolve_profile(project, project_dir)
+    assert resolved.warehouse.schema_name == "dev_schema"
+
+
+def test_legacy_env_var_still_works_with_deprecation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    _write_project(project_dir, profile="test_proj")
+
+    other_dir = tmp_path / "via_legacy_env"
+    other_dir.mkdir()
+    _write_profiles(other_dir)
+
+    monkeypatch.delenv("DBT_ML_PROFILES_DIR", raising=False)
+    monkeypatch.setenv("DOCBT_PROFILES_DIR", str(other_dir))
+    project, _, _ = load_project(project_dir)
+    with pytest.warns(DeprecationWarning, match="DOCBT_PROFILES_DIR"):
+        resolved = resolve_profile(project, project_dir)
     assert resolved.warehouse.schema_name == "dev_schema"
 
 
