@@ -99,6 +99,11 @@ class WarehouseAdapter(ABC):
         """Upsert rows in `df` into `table`, keyed on `key_col`. Returns rows written."""
 
     @abstractmethod
+    def delete_rows(self, table: str, *, key_col: str, keys: list[str]) -> int:
+        """Delete rows from `table` where `key_col` is in `keys`. Returns the
+        number of rows removed. A no-op (returns 0) if the table does not exist."""
+
+    @abstractmethod
     def drop_table(self, table: str) -> None: ...
 
     # ─── querying ─────────────────────────────────────────────────────────
@@ -140,3 +145,7 @@ class WarehouseAdapter(ABC):
 
     @abstractmethod
     def clear_model_state(self, model_name: str) -> None: ...
+
+    @abstractmethod
+    def delete_state(self, model_name: str, document_ids: list[str]) -> None:
+        """Remove state rows for the given `document_ids` under `model_name`."""

@@ -47,6 +47,7 @@ class ModelRunResult:
     backend: str | None = None
     documents_processed: int = 0
     documents_skipped: int = 0
+    documents_deleted: int = 0
     rows_written: int = 0
     duration_seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
@@ -208,6 +209,15 @@ def _run_extraction_model(
                 continue
         docs_to_process.append(doc)
 
+    deleted = 0
+    if is_incremental:
+        current_ids = {doc.document_id for doc in docs}
+        removed = [doc_id for doc_id in processed_state if doc_id not in current_ids]
+        if removed:
+            adapter.delete_rows(model.name, key_col="document_id", keys=removed)
+            adapter.delete_state(model.name, removed)
+            deleted = len(removed)
+
     skipped = len(docs) - len(docs_to_process)
     errors: list[str] = []
     rows: list[dict[str, Any]] = []
@@ -253,6 +263,7 @@ def _run_extraction_model(
         backend=backend_name,
         documents_processed=len(docs_to_process),
         documents_skipped=skipped,
+        documents_deleted=deleted,
         rows_written=rows_written,
         errors=errors,
     )
@@ -287,6 +298,12 @@ def _run_transform_model(
     resolved: ResolvedProfile,
 ) -> ModelRunResult:
     assert model.transform is not None
+    if model.materialization == "incremental":
+        raise RunError(
+            f"Transform model '{model.name}' declares `materialization: incremental`, "
+            "but transforms only support `full` today. Set `materialization: full` "
+            "(or omit it) — see issue #53."
+        )
     if model.transform.type != "python":
         raise RunError(
             f"Model '{model.name}': only `type: python` transforms are supported in v1"
@@ -347,6 +364,12 @@ def _run_ml_model(
     adapter: WarehouseAdapter,
 ) -> ModelRunResult:
     assert model.ml is not None
+    if model.materialization == "incremental":
+        raise RunError(
+            f"ML model '{model.name}' declares `materialization: incremental`, "
+            "but ML models only support `full` today. Set `materialization: full` "
+            "(or omit it) — see issue #53."
+        )
     try:
         output = run_classic_ml_model(
             model=model,

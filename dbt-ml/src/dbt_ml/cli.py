@@ -365,7 +365,7 @@ def run(
 
     header = (
         f"{'model':<22}{'kind':<12}{'mater.':<14}"
-        f"{'processed':>10}{'skipped':>10}{'rows':>8}{'time(s)':>10}"
+        f"{'processed':>10}{'skipped':>10}{'deleted':>9}{'rows':>8}{'time(s)':>10}"
     )
     click.echo(header)
     click.echo("-" * len(header))
@@ -373,10 +373,13 @@ def run(
         click.echo(
             f"{r.model_name:<22}{r.kind:<12}{r.materialization:<14}"
             f"{r.documents_processed:>10}{r.documents_skipped:>10}"
-            f"{r.rows_written:>8}{r.duration_seconds:>10.3f}"
+            f"{r.documents_deleted:>9}{r.rows_written:>8}{r.duration_seconds:>10.3f}"
         )
         for err in r.errors:
             click.echo(f"  ERROR: {err}", err=True)
+
+    if any(r.errors for r in results):
+        ctx.exit(1)
 
 
 @cli.command()
