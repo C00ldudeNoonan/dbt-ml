@@ -45,7 +45,7 @@ def main() -> None:
     repo = Path(__file__).resolve().parents[1]
     example = repo / "examples" / "invoice_pipeline"
 
-    print(f"== dbt_ml scale benchmark — {args.count} documents ==\n")
+    print(f"== dbt_ml scale benchmark - {args.count} documents ==\n")
     samples: list[tuple[str, float]] = []
 
     with TemporaryDirectory() as tmp:
@@ -62,7 +62,7 @@ def main() -> None:
         with timed("first run (cold)", samples):
             results = run_project(project)
         print(
-            "    →",
+            "    ->",
             ", ".join(
                 f"{r.model_name}: processed={r.documents_processed}, "
                 f"rows={r.rows_written}"
@@ -73,7 +73,7 @@ def main() -> None:
         with timed("second run (all skipped)", samples):
             results = run_project(project)
         skipped_total = sum(r.documents_skipped for r in results)
-        print(f"    → skipped {skipped_total} docs")
+        print(f"    -> skipped {skipped_total} docs")
 
         target = invoices_dir / f"invoice_{0:05d}.json"
         data = json.loads(target.read_text())
@@ -83,7 +83,7 @@ def main() -> None:
         with timed("third run (1 changed)", samples):
             results = run_project(project)
         raw = next(r for r in results if r.model_name == "raw_invoices")
-        print(f"    → processed={raw.documents_processed}, skipped={raw.documents_skipped}")
+        print(f"    -> processed={raw.documents_processed}, skipped={raw.documents_skipped}")
 
         with timed("full-refresh", samples):
             run_project(project, full_refresh=True)

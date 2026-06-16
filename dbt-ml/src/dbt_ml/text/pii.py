@@ -80,7 +80,7 @@ def _get_anonymizer() -> AnonymizerEngine:
         raise PIIError(
             "presidio-anonymizer is not installed. Run `uv sync` to install."
         ) from e
-    return AnonymizerEngine()
+    return AnonymizerEngine()  # type: ignore[no-untyped-call]
 
 
 def detect_pii(

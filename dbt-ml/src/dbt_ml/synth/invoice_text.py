@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from typing import Any
 
 from faker import Faker
 
@@ -26,7 +27,7 @@ def generate_invoice_texts(count: int, output_dir: Path, seed: int = 42) -> list
         invoice_id = f"INV-{i:05d}"
         date = fake.date_between(start_date="-1y", end_date="today").isoformat()
         currency = rng.choice(_CURRENCIES)
-        line_items = [
+        line_items: list[dict[str, Any]] = [
             {
                 "description": fake.bs().title(),
                 "qty": rng.randint(1, 5),

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import duckdb
 import polars as pl
@@ -138,8 +138,8 @@ class DuckDBAdapter(WarehouseAdapter):
         row = self.execute(sql, params).fetchone()
         return row[0] if row else None
 
-    def rows(self, sql: str, params: list[Any] | None = None) -> list[tuple]:
-        return self.execute(sql, params).fetchall()
+    def rows(self, sql: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:
+        return cast(list[tuple[Any, ...]], self.execute(sql, params).fetchall())
 
     def clean(self) -> str:
         """Delete the DuckDB file. Closes the connection if open."""
