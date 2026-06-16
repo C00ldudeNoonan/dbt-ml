@@ -109,13 +109,13 @@ class DuckDBAdapter(WarehouseAdapter):
                 f"SELECT * FROM dbt_ml_staging LIMIT 0"
             )
             if key_col in df.columns:
-                ids = df[key_col].to_list()
-                if ids:
-                    placeholders = ",".join(["?"] * len(ids))
-                    self.connection.execute(
-                        f'DELETE FROM {full} WHERE "{key_col}" IN ({placeholders})',
-                        ids,
-                    )
+                self.connection.execute(
+                    f"""
+                    DELETE FROM {full} AS target
+                    USING dbt_ml_staging AS source
+                    WHERE target."{key_col}" = source."{key_col}"
+                    """
+                )
             self.connection.execute(f"INSERT INTO {full} SELECT * FROM dbt_ml_staging")
         finally:
             self.connection.unregister("dbt_ml_staging")
