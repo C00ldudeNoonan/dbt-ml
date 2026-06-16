@@ -59,6 +59,18 @@
   <tr><th>skipped</th><td>{{ last_run.documents_skipped }}</td></tr>
   <tr><th>rows written</th><td>{{ last_run.rows_written }}</td></tr>
   <tr><th>duration (s)</th><td>{{ last_run.duration_seconds }}</td></tr>
+  {% if last_run.artifact_version %}
+  <tr><th>artifact version</th><td><code>{{ last_run.artifact_version }}</code></td></tr>
+  {% endif %}
+  {% if last_run.artifact_path %}
+  <tr><th>artifact path</th><td><code>{{ last_run.artifact_path }}</code></td></tr>
+  {% endif %}
+  {% if last_run.metrics %}
+  <tr><th>metrics</th><td><pre><code>{{ last_run.metrics | tojson(indent=2) }}</code></pre></td></tr>
+  {% endif %}
+  {% if last_run.artifact_metadata %}
+  <tr><th>artifact metadata</th><td><pre><code>{{ last_run.artifact_metadata | tojson(indent=2) }}</code></pre></td></tr>
+  {% endif %}
   {% if last_run.errors %}
   <tr><th>errors</th><td><pre><code>{{ last_run.errors | join('\n') }}</code></pre></td></tr>
   {% endif %}
