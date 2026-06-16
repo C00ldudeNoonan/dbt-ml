@@ -102,6 +102,36 @@ def test_changed_doc_is_reprocessed(fresh_project: Path) -> None:
     assert rows[0][0] == "MUTATED_VENDOR"
 
 
+def test_removed_doc_is_pruned_on_incremental(fresh_project: Path) -> None:
+    invoices_dir = fresh_project / "data" / "invoices"
+    generate_invoices(5, invoices_dir, seed=1)
+    run_project(fresh_project)
+
+    (invoices_dir / "invoice_00002.json").unlink()
+
+    results = run_project(fresh_project)
+    raw = next(r for r in results if r.model_name == "raw_invoices")
+    assert raw.documents_processed == 0
+    assert raw.documents_skipped == 4
+    assert raw.documents_deleted == 1
+
+    db = fresh_project / "target" / "dbt_ml.duckdb"
+    rows = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.raw_invoices')
+    assert rows[0][0] == 4
+    gone = _query(
+        db,
+        'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.raw_invoices '
+        "WHERE source_path = 'invoice_00002.json'",
+    )
+    assert gone[0][0] == 0
+    state = _query(
+        db,
+        "SELECT COUNT(*) FROM \"dbt_ml\".dbt_ml.dbt_ml_state "
+        "WHERE model_name = 'raw_invoices'",
+    )
+    assert state[0][0] == 4
+
+
 def test_full_refresh_reprocesses_all(fresh_project: Path) -> None:
     invoices_dir = fresh_project / "data" / "invoices"
     generate_invoices(5, invoices_dir, seed=1)
@@ -111,6 +141,16 @@ def test_full_refresh_reprocesses_all(fresh_project: Path) -> None:
     raw = next(r for r in results if r.model_name == "raw_invoices")
     assert raw.documents_processed == 5
     assert raw.documents_skipped == 0
+
+
+def test_incremental_transform_is_rejected(fresh_project: Path) -> None:
+    generate_invoices(3, fresh_project / "data" / "invoices", seed=1)
+    summary_yml = fresh_project / "models" / "invoice_summary.yml"
+    text = summary_yml.read_text()
+    summary_yml.write_text(text.replace("materialization: full", "materialization: incremental"))
+
+    with pytest.raises(RunError, match="only support `full`"):
+        run_project(fresh_project, select="invoice_summary")
 
 
 def test_transform_aggregates_dependency(fresh_project: Path) -> None:
@@ -172,6 +212,28 @@ def test_run_with_threads_produces_same_results(fresh_project: Path) -> None:
     db = fresh_project / "target" / "dbt_ml.duckdb"
     rows = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.raw_invoices')
     assert rows[0][0] == 20
+
+
+def test_threaded_run_parallelizes_independent_branches(fresh_project: Path) -> None:
+    """invoice_summary and monthly_totals are independent siblings of raw_invoices;
+    running the DAG with threads>1 must produce the same tables as a serial run."""
+    generate_invoices(20, fresh_project / "data" / "invoices", seed=4)
+
+    serial = run_project(fresh_project)
+    serial_rows = {r.model_name: r.rows_written for r in serial}
+
+    clean_project(fresh_project)
+    parallel = run_project(fresh_project, threads=4)
+    parallel_rows = {r.model_name: r.rows_written for r in parallel}
+
+    assert parallel_rows == serial_rows
+    assert set(parallel_rows) == {"raw_invoices", "invoice_summary", "monthly_totals"}
+
+    db = fresh_project / "target" / "dbt_ml.duckdb"
+    summary = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.invoice_summary')
+    monthly = _query(db, 'SELECT COUNT(*) FROM "dbt_ml".dbt_ml.monthly_totals')
+    assert summary[0][0] > 0
+    assert monthly[0][0] > 0
 
 
 def test_clean_removes_duckdb(fresh_project: Path) -> None:

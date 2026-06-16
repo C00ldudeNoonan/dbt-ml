@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import polars as pl
 
@@ -30,6 +31,28 @@ class RunError(Exception):
     pass
 
 
+class _SerializedAdapter:
+    """Serializes every adapter method call behind a lock so independent models
+    can run on separate threads while sharing one warehouse connection. Property
+    access (schema_ref, catalog, …) passes through untouched; only callables are
+    guarded, which covers all the read/write paths the runner uses."""
+
+    def __init__(self, adapter: WarehouseAdapter, lock: threading.Lock) -> None:
+        self._adapter = adapter
+        self._lock = lock
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._adapter, name)
+        if not callable(attr):
+            return attr
+
+        def guarded(*args: Any, **kwargs: Any) -> Any:
+            with self._lock:
+                return attr(*args, **kwargs)
+
+        return guarded
+
+
 @dataclass
 class DocumentRef:
     source_name: str
@@ -47,6 +70,7 @@ class ModelRunResult:
     backend: str | None = None
     documents_processed: int = 0
     documents_skipped: int = 0
+    documents_deleted: int = 0
     rows_written: int = 0
     duration_seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
@@ -78,24 +102,51 @@ def run_project(
         s.name: _discover_source(s, project_dir) for s in sources
     }
 
-    results: list[ModelRunResult] = []
+    models_by_name = {m.name: m for m in models}
+
+    def _run(name: str, adapter: WarehouseAdapter) -> ModelRunResult:
+        return _run_model(
+            model=models_by_name[name],
+            project=project,
+            project_dir=project_dir,
+            source_docs=source_docs,
+            adapter=adapter,
+            resolved=resolved,
+            full_refresh=full_refresh,
+            threads=threads,
+        )
 
     with create_adapter(resolved.warehouse, project_dir=project_dir) as adapter:
-        for name in selected:
-            model = next(m for m in models if m.name == name)
-            result = _run_model(
-                model=model,
-                project=project,
-                project_dir=project_dir,
-                source_docs=source_docs,
-                adapter=adapter,
-                resolved=resolved,
-                full_refresh=full_refresh,
-                threads=threads,
-            )
-            results.append(result)
+        if threads > 1 and len(selected) > 1:
+            results_by_name = _run_in_batches(dag, selected, adapter, _run, threads)
+        else:
+            results_by_name = {name: _run(name, adapter) for name in selected}
 
-    return results
+    return [results_by_name[name] for name in selected]
+
+
+def _run_in_batches(
+    dag: ProjectDAG,
+    selected: list[str],
+    adapter: WarehouseAdapter,
+    run_one: Any,
+    threads: int,
+) -> dict[str, ModelRunResult]:
+    """Run topological generations: models within a batch are independent and
+    run concurrently; all warehouse access is serialized behind a lock."""
+    guarded = cast(WarehouseAdapter, _SerializedAdapter(adapter, threading.Lock()))
+    results_by_name: dict[str, ModelRunResult] = {}
+    for batch in dag.parallel_batches(selected):
+        if len(batch) == 1:
+            results_by_name[batch[0]] = run_one(batch[0], guarded)
+            continue
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(threads, len(batch))
+        ) as ex:
+            futures = {ex.submit(run_one, name, guarded): name for name in batch}
+            for future in concurrent.futures.as_completed(futures):
+                results_by_name[futures[future]] = future.result()
+    return results_by_name
 
 
 def _discover_source(source: SourceConfig, project_dir: Path) -> list[DocumentRef]:
@@ -208,6 +259,15 @@ def _run_extraction_model(
                 continue
         docs_to_process.append(doc)
 
+    deleted = 0
+    if is_incremental:
+        current_ids = {doc.document_id for doc in docs}
+        removed = [doc_id for doc_id in processed_state if doc_id not in current_ids]
+        if removed:
+            adapter.delete_rows(model.name, key_col="document_id", keys=removed)
+            adapter.delete_state(model.name, removed)
+            deleted = len(removed)
+
     skipped = len(docs) - len(docs_to_process)
     errors: list[str] = []
     rows: list[dict[str, Any]] = []
@@ -253,6 +313,7 @@ def _run_extraction_model(
         backend=backend_name,
         documents_processed=len(docs_to_process),
         documents_skipped=skipped,
+        documents_deleted=deleted,
         rows_written=rows_written,
         errors=errors,
     )
@@ -287,6 +348,12 @@ def _run_transform_model(
     resolved: ResolvedProfile,
 ) -> ModelRunResult:
     assert model.transform is not None
+    if model.materialization == "incremental":
+        raise RunError(
+            f"Transform model '{model.name}' declares `materialization: incremental`, "
+            "but transforms only support `full` today. Set `materialization: full` "
+            "(or omit it) — see issue #53."
+        )
     if model.transform.type != "python":
         raise RunError(
             f"Model '{model.name}': only `type: python` transforms are supported in v1"
@@ -347,6 +414,12 @@ def _run_ml_model(
     adapter: WarehouseAdapter,
 ) -> ModelRunResult:
     assert model.ml is not None
+    if model.materialization == "incremental":
+        raise RunError(
+            f"ML model '{model.name}' declares `materialization: incremental`, "
+            "but ML models only support `full` today. Set `materialization: full` "
+            "(or omit it) — see issue #53."
+        )
     try:
         output = run_classic_ml_model(
             model=model,

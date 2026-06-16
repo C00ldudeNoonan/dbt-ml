@@ -34,6 +34,30 @@ def test_example_dag(example_project_dir: Path) -> None:
     assert "raw_invoices --> monthly_totals" in mermaid
 
 
+def test_parallel_batches_groups_independent_siblings(example_project_dir: Path) -> None:
+    _, sources, models = load_project(example_project_dir)
+    dag = ProjectDAG(sources, models)
+    selected = dag.select_models(select="raw_invoices+")
+
+    batches = dag.parallel_batches(selected)
+    assert batches[0] == ["raw_invoices"]
+    assert set(batches[1]) == {"invoice_summary", "monthly_totals"}
+    assert [n for batch in batches for n in batch] == sorted(
+        selected, key=dag.execution_order().index
+    )
+
+
+def test_parallel_batches_ignores_unselected_predecessors(
+    example_project_dir: Path,
+) -> None:
+    _, sources, models = load_project(example_project_dir)
+    dag = ProjectDAG(sources, models)
+
+    batches = dag.parallel_batches(["invoice_summary", "monthly_totals"])
+    assert len(batches) == 1
+    assert set(batches[0]) == {"invoice_summary", "monthly_totals"}
+
+
 def test_unknown_ref_raises() -> None:
     models = [
         ModelConfig(name="a", depends_on=["ref('does_not_exist')"]),
