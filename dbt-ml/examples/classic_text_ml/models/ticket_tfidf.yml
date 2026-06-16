@@ -16,7 +16,7 @@ models:
         - vocabulary_size
       options:
         ngram_range: [1, 2]
-        min_df: 2
+        min_df: 1
         max_features: 50000
     materialization: full
     tags: [features, classic_ml]

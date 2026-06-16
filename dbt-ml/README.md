@@ -215,10 +215,9 @@ clustering, topic models, and NLP enrichment.
       max_features: 50000
 ```
 
-The grammar is parsed and emitted into `manifest.json` now. Execution, artifact
-metadata, and built-in providers land incrementally in the classic ML issues,
-starting with feature extraction (#40) and artifact lifecycle (#44). See
-`docs/classic-ml.md` for the full design contract.
+The first executable provider is `builtin.tfidf`, which writes a long-form
+feature table plus `target/artifacts/<model>/metadata.json` and
+`vocabulary.json`. See `docs/classic-ml.md` for the full design contract.
 
 ## Tests
 

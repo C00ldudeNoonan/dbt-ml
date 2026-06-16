@@ -7,8 +7,9 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from dbt_ml.runner import RunError, clean_project, run_project
-from dbt_ml.synth import generate_invoices
+from dbt_ml.manifest import write_run_results
+from dbt_ml.runner import clean_project, run_project
+from dbt_ml.synth import generate_invoices, generate_support_tickets
 
 
 @pytest.fixture
@@ -167,42 +168,84 @@ def test_clean_removes_duckdb(fresh_project: Path) -> None:
     assert not db.exists()
 
 
-def test_ml_model_reports_clear_execution_error(tmp_path: Path) -> None:
-    (tmp_path / "dbt_ml_project.yml").write_text(
-        "\n".join(
-            [
-                "name: classic_ml_project",
-                "version: '0.1.0'",
-                "source-paths: ['sources']",
-                "model-paths: ['models']",
-            ]
-        )
+def test_classic_ml_tfidf_end_to_end(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    generate_support_tickets(8, project / "data" / "tickets", seed=7)
+
+    results = run_project(project)
+    by_name = {r.model_name: r for r in results}
+    ml_result = by_name["ticket_tfidf"]
+    assert ml_result.kind == "ml"
+    assert ml_result.rows_written > 0
+    assert ml_result.artifact_version is not None
+    assert ml_result.training_input is not None
+    assert ml_result.training_input["refs"] == ["raw_tickets"]
+    assert ml_result.training_input["row_count"] == 8
+    assert ml_result.metrics["vocabulary_size"] > 0
+    assert ml_result.metrics["feature_rows"] == ml_result.rows_written
+
+    artifact = project / "target" / "artifacts" / "ticket_tfidf"
+    assert (artifact / "metadata.json").exists()
+    assert (artifact / "vocabulary.json").exists()
+
+    db = project / "target" / "dbt_ml.duckdb"
+    rows = _query(
+        db,
+        'SELECT COUNT(*), COUNT(DISTINCT row_id) FROM '
+        '"dbt_ml".classic_text_ml.ticket_tfidf',
     )
-    (tmp_path / "sources").mkdir()
-    (tmp_path / "sources" / "tickets.yml").write_text(
-        "\n".join(
-            [
-                "version: 2",
-                "sources:",
-                "  - name: tickets",
-                "    path: data/tickets",
-            ]
-        )
-    )
-    (tmp_path / "models").mkdir()
-    (tmp_path / "models" / "ticket_features.yml").write_text(
+    assert rows[0][0] == ml_result.rows_written
+    assert rows[0][1] == 8
+
+    run_results_path = write_run_results(project, results)
+    payload = json.loads(run_results_path.read_text())
+    emitted = next(r for r in payload["results"] if r["model_name"] == "ticket_tfidf")
+    assert emitted["artifact_version"] == ml_result.artifact_version
+    assert emitted["training_input"]["row_count"] == 8
+    assert emitted["metrics"]["vocabulary_size"] == ml_result.metrics["vocabulary_size"]
+
+
+def test_classic_ml_tfidf_fit_then_predict(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    (project / "models" / "ticket_tfidf.yml").write_text(
         "\n".join(
             [
                 "version: 2",
                 "models:",
-                "  - name: ticket_tfidf",
+                "  - name: ticket_tfidf_fit",
+                "    depends_on: [ref('raw_tickets')]",
                 "    ml:",
                 "      task: features",
+                "      mode: fit",
                 "      provider: builtin.tfidf",
-                "      text_field: body",
+                "      text_field: summary",
+                "      artifact:",
+                "        path: target/artifacts/ticket_tfidf",
+                "      options:",
+                "        min_df: 1",
+                "  - name: ticket_tfidf_predict",
+                "    depends_on: [ref('raw_tickets'), ref('ticket_tfidf_fit')]",
+                "    ml:",
+                "      task: features",
+                "      mode: predict",
+                "      provider: builtin.tfidf",
+                "      text_field: summary",
+                "      artifact:",
+                "        path: target/artifacts/ticket_tfidf",
             ]
         )
     )
+    generate_support_tickets(5, project / "data" / "tickets", seed=11)
 
-    with pytest.raises(RunError, match="uses `ml:`"):
-        run_project(tmp_path)
+    results = run_project(project)
+    by_name = {r.model_name: r for r in results}
+    fit = by_name["ticket_tfidf_fit"]
+    predict = by_name["ticket_tfidf_predict"]
+    assert fit.rows_written == 1
+    assert predict.rows_written > 0
+    assert fit.artifact_version == predict.artifact_version
+    assert fit.training_input == predict.training_input

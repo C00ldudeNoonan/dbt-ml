@@ -1,13 +1,14 @@
 # Classic Text ML Example
 
-This example is a design preview for dbt-ml's classic text and document ML
-lane. It shows how a support-ticket corpus will flow from JSON extraction into
-a planned TF-IDF feature model.
+This example is the first executable slice of dbt-ml's classic text and
+document ML lane. It flows from JSON extraction into a built-in TF-IDF feature
+model.
 
-The project compiles today and emits `ml:` metadata into `manifest.json`.
-Running the ML model requires the feature extractor and artifact lifecycle work
-tracked in #40 and #44.
+The ML model writes a long-form feature table and persists metadata under
+`target/artifacts/ticket_tfidf/`.
 
 ```bash
 uv run dbt-ml --project-dir examples/classic_text_ml compile
+uv run dbt-ml --project-dir examples/classic_text_ml seed --type tickets --count 20
+uv run dbt-ml --project-dir examples/classic_text_ml run
 ```

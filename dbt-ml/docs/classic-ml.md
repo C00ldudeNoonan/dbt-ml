@@ -6,9 +6,9 @@ classifiers, clustering, topic models, named-entity enrichment, deduplication,
 and deterministic metrics are cheaper, easier to reproduce, and often enough
 for production document pipelines.
 
-This page defines the v0.2 design contract. The `ml:` block is parsed and
-emitted into artifacts now; executors land incrementally in follow-up issues
-such as #40 and #44.
+This page defines the v0.2 design contract. The first executable slice is
+`task: features` with `provider: builtin.tfidf`; additional providers and
+artifact lifecycle depth land incrementally in follow-up issues.
 
 ## Model Shape
 
@@ -103,12 +103,11 @@ Classic ML versioning should account for:
 - upstream training data hash or declared artifact hash;
 - dependency/provider version when it affects output.
 
-This branch adds the `ml:` block to `code_version`, which covers static config.
-Training-data and artifact hashes belong with the executor work.
+The `ml:` block is included in `code_version`, which covers static config. The
+first TF-IDF executor also records a training input hash and artifact version in
+`run_results.json`.
 
 ## Initial Examples
 
-`examples/classic_text_ml/` is a design-preview project showing a support-ticket
-feature extraction pipeline using `ml.task: features` and `provider:
-builtin.tfidf`. It is intended to compile and emit manifest metadata; execution
-requires the #40 feature extractor and #44 artifact lifecycle work.
+`examples/classic_text_ml/` is a runnable support-ticket feature extraction
+pipeline using `ml.task: features` and `provider: builtin.tfidf`.
