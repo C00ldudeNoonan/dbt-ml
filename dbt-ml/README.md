@@ -215,9 +215,16 @@ clustering, topic models, and NLP enrichment.
       max_features: 50000
 ```
 
-The first executable provider is `builtin.tfidf`, which writes a long-form
-feature table plus `target/artifacts/<model>/metadata.json` and
-`vocabulary.json`. See `docs/classic-ml.md` for the full design contract.
+Executable feature providers are `builtin.count`, `builtin.tfidf`, and
+`builtin.hashing`. They write long-form sparse feature tables with stable
+`row_id`, `term`, `term_index`, `count`, `tf`, `idf`, `tfidf`, and `value`
+columns where applicable. Fitted vocabulary providers persist
+`target/artifacts/<model>/metadata.json` plus `vocabulary.json`; hashing is
+stateless and persists metadata only.
+
+Common options include `analyzer: word | char | char_wb`, `ngram_range`,
+`min_df`, `max_df`, `max_features`, `stop_words`, `binary`, `n_features`, and
+`alternate_sign`. See `docs/classic-ml.md` for the full design contract.
 
 ## Tests
 

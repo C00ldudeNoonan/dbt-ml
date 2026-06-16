@@ -7,8 +7,8 @@ and deterministic metrics are cheaper, easier to reproduce, and often enough
 for production document pipelines.
 
 This page defines the v0.2 design contract. The first executable slice is
-`task: features` with `provider: builtin.tfidf`; additional providers and
-artifact lifecycle depth land incrementally in follow-up issues.
+`task: features` with built-in count, TF-IDF, and hashing vectorizers;
+artifact lifecycle depth lands incrementally in follow-up issues.
 
 ## Model Shape
 
@@ -33,6 +33,36 @@ models:
         min_df: 3
         max_features: 50000
 ```
+
+## Feature Providers
+
+The built-in feature providers are pure Python and do not require
+scikit-learn:
+
+| provider | Output | Artifact behavior |
+| --- | --- | --- |
+| `builtin.count` | Long-form sparse count features. `binary: true` stores presence/absence counts. | Persists `metadata.json` and `vocabulary.json`. |
+| `builtin.tfidf` | Long-form sparse TF-IDF features with `tf`, `idf`, `tfidf`, and `value`. | Persists `metadata.json` and `vocabulary.json`. |
+| `builtin.hashing` | Stateless long-form hashed features with `hash_bucket` and `value`. | Persists `metadata.json` only. |
+
+Common vectorizer options:
+
+| option | Meaning |
+| --- | --- |
+| `analyzer` | `word`, `char`, or `char_wb`; defaults to `word`. |
+| `ngram_range` | Two-item range such as `[1, 2]`. |
+| `token_pattern` | Regex used by the word analyzer. |
+| `stop_words` | List of terms or `english` for a small built-in English stop-word set. |
+| `min_df` / `max_df` | Document-frequency filters. Integers are document counts; floats from 0 to 1 are proportions. |
+| `max_features` | Keep the highest-frequency vocabulary terms before sorting the vocabulary. |
+| `binary` | For count/TF-IDF, collapse repeated terms in a document to a count of 1. |
+| `n_features` | Hash bucket count for `builtin.hashing`; defaults to `1048576`. |
+| `alternate_sign` | Hashing option that alternates signs by hash value; defaults to `true`. |
+
+All feature providers materialize sparse rows with stable identifiers and
+feature metadata. Vocabulary-based providers expose terms through
+`vocabulary.json`; hashing is useful when users need fixed-width features
+without fitting or storing a vocabulary.
 
 ## Tasks
 
@@ -84,14 +114,14 @@ there, but it must expose a stable metadata record:
   "metrics": {
     "vocabulary_size": 12000
   },
-  "files": ["vocabulary.json", "metadata.json"]
+  "files": ["metadata.json", "vocabulary.json"]
 }
 ```
 
 `manifest.json` should contain the static `ml:` config and `code_version`.
-`run_results.json` should eventually include artifact version, training input,
-and metrics for executed ML models. The first executor should keep this shape
-small rather than inventing per-provider result formats.
+`run_results.json` includes artifact version, training input, and metrics for
+executed ML models. The first executors keep this shape small rather than
+inventing per-provider result formats.
 
 ## Versioning
 
@@ -104,10 +134,11 @@ Classic ML versioning should account for:
 - dependency/provider version when it affects output.
 
 The `ml:` block is included in `code_version`, which covers static config. The
-first TF-IDF executor also records a training input hash and artifact version in
-`run_results.json`.
+built-in feature executors also record a training input hash and artifact
+version in `run_results.json`.
 
 ## Initial Examples
 
 `examples/classic_text_ml/` is a runnable support-ticket feature extraction
-pipeline using `ml.task: features` and `provider: builtin.tfidf`.
+pipeline using `ml.task: features` with `builtin.tfidf`, `builtin.count`, and
+`builtin.hashing`.

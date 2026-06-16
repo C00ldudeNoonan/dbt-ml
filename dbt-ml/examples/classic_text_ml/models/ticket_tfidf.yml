@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: ticket_tfidf
-    description: "Planned TF-IDF feature table for ticket summaries"
+    description: "TF-IDF feature table for ticket summaries"
     depends_on: [ref('raw_tickets')]
     ml:
       task: features
@@ -18,5 +18,41 @@ models:
         ngram_range: [1, 2]
         min_df: 1
         max_features: 50000
+    materialization: full
+    tags: [features, classic_ml]
+
+  - name: ticket_count
+    description: "Binary count-vector feature table for ticket summaries"
+    depends_on: [ref('raw_tickets')]
+    ml:
+      task: features
+      mode: fit_transform
+      provider: builtin.count
+      text_field: summary
+      metrics:
+        - row_count
+        - vocabulary_size
+      options:
+        ngram_range: [1, 1]
+        min_df: 1
+        binary: true
+        stop_words: english
+    materialization: full
+    tags: [features, classic_ml]
+
+  - name: ticket_hashing
+    description: "Stateless hashing-vector feature table for ticket summaries"
+    depends_on: [ref('raw_tickets')]
+    ml:
+      task: features
+      mode: fit_transform
+      provider: builtin.hashing
+      text_field: summary
+      metrics:
+        - row_count
+        - hash_buckets
+      options:
+        n_features: 2048
+        alternate_sign: false
     materialization: full
     tags: [features, classic_ml]

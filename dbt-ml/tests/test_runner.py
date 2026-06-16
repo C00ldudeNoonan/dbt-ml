@@ -32,6 +32,18 @@ def _query(db_path: Path, sql: str) -> list[tuple]:
         con.close()
 
 
+def _write_ticket(path: Path, ticket_id: str, summary: str) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "ticket_id": ticket_id,
+                "summary": summary,
+                "priority": "medium",
+            }
+        )
+    )
+
+
 def test_end_to_end_run(fresh_project: Path) -> None:
     invoices_dir = fresh_project / "data" / "invoices"
     generate_invoices(10, invoices_dir, seed=1)
@@ -249,3 +261,141 @@ def test_classic_ml_tfidf_fit_then_predict(tmp_path: Path) -> None:
     assert predict.rows_written > 0
     assert fit.artifact_version == predict.artifact_version
     assert fit.training_input == predict.training_input
+
+
+def test_classic_ml_count_vectorizer_options(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    tickets = project / "data" / "tickets"
+    tickets.mkdir(parents=True)
+    _write_ticket(tickets / "ticket_1.json", "T-1", "alpha alpha beta the")
+    _write_ticket(tickets / "ticket_2.json", "T-2", "beta gamma the")
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_count",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: features",
+                "      mode: fit_transform",
+                "      provider: builtin.count",
+                "      text_field: summary",
+                "      options:",
+                "        binary: true",
+                "        stop_words: [the]",
+                "    materialization: full",
+            ]
+        )
+    )
+
+    results = run_project(project)
+    count = next(r for r in results if r.model_name == "ticket_count")
+    assert count.rows_written == 4
+    assert count.metrics["vocabulary_size"] == 3
+
+    db = project / "target" / "dbt_ml.duckdb"
+    rows = _query(
+        db,
+        'SELECT term, SUM(count), SUM(value) FROM "dbt_ml".classic_text_ml.ticket_count '
+        "GROUP BY term ORDER BY term",
+    )
+    assert rows == [
+        ("alpha", 1, 1.0),
+        ("beta", 2, 2.0),
+        ("gamma", 1, 1.0),
+    ]
+    vocab_path = project / "target" / "artifacts" / "ticket_count" / "vocabulary.json"
+    vocab = json.loads(vocab_path.read_text())
+    assert vocab["terms"] == ["alpha", "beta", "gamma"]
+
+
+def test_classic_ml_hashing_vectorizer(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    tickets = project / "data" / "tickets"
+    tickets.mkdir(parents=True)
+    _write_ticket(tickets / "ticket_1.json", "T-1", "alpha beta")
+    _write_ticket(tickets / "ticket_2.json", "T-2", "alpha")
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_hashing",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: features",
+                "      mode: fit_transform",
+                "      provider: builtin.hashing",
+                "      text_field: summary",
+                "      options:",
+                "        n_features: 8",
+                "        alternate_sign: false",
+                "    materialization: full",
+            ]
+        )
+    )
+
+    results = run_project(project)
+    hashing = next(r for r in results if r.model_name == "ticket_hashing")
+    assert hashing.rows_written > 0
+    assert hashing.metrics["hash_buckets"] == 8
+    assert hashing.metrics["vocabulary_size"] == 0
+
+    db = project / "target" / "dbt_ml.duckdb"
+    rows = _query(
+        db,
+        'SELECT MIN(hash_bucket), MAX(hash_bucket), COUNT(DISTINCT term) '
+        'FROM "dbt_ml".classic_text_ml.ticket_hashing',
+    )
+    assert rows[0][0] >= 0
+    assert rows[0][1] < 8
+    assert rows[0][2] > 0
+    metadata = json.loads(
+        (project / "target" / "artifacts" / "ticket_hashing" / "metadata.json").read_text()
+    )
+    assert metadata["files"] == ["metadata.json"]
+
+
+def test_classic_ml_tfidf_character_ngrams(tmp_path: Path) -> None:
+    src = Path(__file__).resolve().parents[1] / "examples" / "classic_text_ml"
+    project = tmp_path / "classic_text_ml"
+    shutil.copytree(src, project, ignore=shutil.ignore_patterns("data", "target"))
+    tickets = project / "data" / "tickets"
+    tickets.mkdir(parents=True)
+    _write_ticket(tickets / "ticket_1.json", "T-1", "abc abc")
+    _write_ticket(tickets / "ticket_2.json", "T-2", "abd")
+    (project / "models" / "ticket_tfidf.yml").write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "models:",
+                "  - name: ticket_char_tfidf",
+                "    depends_on: [ref('raw_tickets')]",
+                "    ml:",
+                "      task: features",
+                "      mode: fit_transform",
+                "      provider: builtin.tfidf",
+                "      text_field: summary",
+                "      options:",
+                "        analyzer: char",
+                "        ngram_range: [3, 3]",
+                "        min_df: 1",
+                "    materialization: full",
+            ]
+        )
+    )
+
+    run_project(project)
+
+    db = project / "target" / "dbt_ml.duckdb"
+    rows = _query(
+        db,
+        'SELECT term, COUNT(*) FROM "dbt_ml".classic_text_ml.ticket_char_tfidf '
+        "WHERE term = 'abc' GROUP BY term",
+    )
+    assert rows == [("abc", 1)]
