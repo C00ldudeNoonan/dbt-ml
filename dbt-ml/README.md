@@ -226,6 +226,10 @@ Common options include `analyzer: word | char | char_wb`, `ngram_range`,
 `min_df`, `max_df`, `max_features`, `stop_words`, `binary`, `n_features`, and
 `alternate_sign`. See `docs/classic-ml.md` for the full design contract.
 
+The first supervised provider is `builtin.naive_bayes`, which trains a
+deterministic text classifier from `text_field` and `label_field`, persists a
+model artifact, and materializes prediction rows with scores/probabilities.
+
 ## Tests
 
 **Structural:**

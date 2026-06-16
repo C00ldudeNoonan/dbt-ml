@@ -72,7 +72,7 @@ patterns:
 | task | Purpose | Likely first providers |
 | --- | --- | --- |
 | `features` | Count, TF-IDF, hashing, dense/sparse document features | `builtin.count`, `builtin.tfidf`, `builtin.hashing` |
-| `classifier` | Supervised document or row classification | `sklearn.logistic_regression`, `sklearn.linear_svc`, `sklearn.sgd_classifier` |
+| `classifier` | Supervised document or row classification | `builtin.naive_bayes`, later `sklearn.logistic_regression`, `sklearn.linear_svc`, `sklearn.sgd_classifier` |
 | `regressor` | Supervised numeric prediction | `sklearn.linear_model`, `sklearn.ensemble` |
 | `cluster` | Document clustering and nearest-neighbor grouping | `sklearn.kmeans`, later HDBSCAN-style providers |
 | `topic_model` | Topic discovery and document-topic tables | `sklearn.nmf`, `sklearn.lda` |
@@ -81,6 +81,36 @@ patterns:
 Providers should remain optional dependencies. The base package should keep
 working for extraction and pure-Python transforms without installing
 scikit-learn or spaCy.
+
+## Supervised Classification
+
+The first executable classifier is `builtin.naive_bayes`, a pure-Python
+multinomial Naive Bayes provider for deterministic text classification. It
+uses the same analyzer, n-gram, stop-word, and document-frequency options as
+feature providers, plus `alpha` for smoothing.
+
+```yaml
+models:
+  - name: ticket_priority_nb
+    depends_on: [ref('raw_tickets')]
+    ml:
+      task: classifier
+      mode: fit_transform
+      provider: builtin.naive_bayes
+      text_field: summary
+      label_field: priority
+      metrics: [accuracy, class_count, vocabulary_size]
+      options:
+        ngram_range: [1, 2]
+        min_df: 1
+        alpha: 1.0
+```
+
+`fit_transform` trains the classifier, persists `model.json`, and materializes
+one prediction row per input row with `prediction`, `score`, JSON
+`probabilities`, and `correct` when labels are present. `fit` writes artifact
+metadata only, while `predict` and `load_pretrained` reuse a persisted artifact
+against new rows.
 
 ## Modes
 
