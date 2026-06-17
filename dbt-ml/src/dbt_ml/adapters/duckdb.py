@@ -142,8 +142,10 @@ class DuckDBAdapter(WarehouseAdapter):
             return self.connection.execute(sql)
         return self.connection.execute(sql, params)
 
-    def query_df(self, sql: str) -> pl.DataFrame:
-        return self.connection.execute(sql).pl()
+    def query_df(self, sql: str, params: list[Any] | None = None) -> pl.DataFrame:
+        if params is None:
+            return self.connection.execute(sql).pl()
+        return self.connection.execute(sql, params).pl()
 
     def scalar(self, sql: str, params: list[Any] | None = None) -> Any:
         row = self.execute(sql, params).fetchone()

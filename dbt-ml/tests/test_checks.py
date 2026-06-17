@@ -114,6 +114,61 @@ def test_relationships_pass_and_fail(populated_db: WarehouseAdapter) -> None:
     assert "missing from items.id" in bad[0].message
 
 
+def test_store_failures_sql_test_persists_rows(populated_db: WarehouseAdapter) -> None:
+    # items.total has one NULL (row id=3, vendor=C)
+    results = evaluate_test_spec(
+        {"not_null": "total"},
+        model_name="items",
+        table_ref=populated_db.table_ref("items"),
+        adapter=populated_db,
+        store_failures=True,
+    )
+    r = results[0]
+    assert not r.passed
+    assert r.failures_table == "dbt_ml_test_failures__items__not_null__total"
+    assert r.failure_count == 1
+    stored = populated_db.query_df(
+        f"SELECT * FROM {populated_db.table_ref(r.failures_table)}"
+    )
+    assert stored.height == 1
+    assert stored["vendor"].to_list() == ["C"]
+
+
+def test_store_failures_in_memory_test_persists_rows(
+    populated_db: WarehouseAdapter,
+) -> None:
+    # vendor in {A, B, C, D}; only "A" matches ^A$, so 3 rows fail.
+    results = evaluate_test_spec(
+        {"matches_regex": {"column": "vendor", "pattern": "^A$"}},
+        model_name="items",
+        table_ref=populated_db.table_ref("items"),
+        adapter=populated_db,
+        store_failures=True,
+    )
+    r = results[0]
+    assert not r.passed
+    assert r.failure_count == 3
+    assert r.failures_table is not None
+    assert r.failures_table.endswith("matches_regex__vendor")
+    stored = populated_db.query_df(
+        f"SELECT * FROM {populated_db.table_ref(r.failures_table)}"
+    )
+    assert set(stored["vendor"].to_list()) == {"B", "C", "D"}
+
+
+def test_store_failures_noop_when_passing(populated_db: WarehouseAdapter) -> None:
+    results = evaluate_test_spec(
+        {"not_null": "id"},
+        model_name="items",
+        table_ref=populated_db.table_ref("items"),
+        adapter=populated_db,
+        store_failures=True,
+    )
+    assert results[0].passed
+    assert results[0].failures_table is None
+    assert results[0].failure_count is None
+
+
 def test_relationships_requires_to_and_field(populated_db: WarehouseAdapter) -> None:
     with pytest.raises(UnknownTestError, match="relationships requires"):
         evaluate_test_spec(

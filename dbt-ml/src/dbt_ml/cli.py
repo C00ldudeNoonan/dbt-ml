@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 
 from .adapters import AdapterError, create_adapter
-from .checks import run_project_tests
+from .checks import TestResult, run_project_tests
 from .config import ConfigError, load_project
 from .config.model import ModelConfig
 from .config.project import ProjectConfig
@@ -476,6 +476,11 @@ def run(
     show_default=True,
     help="Parallel worker threads per extraction model.",
 )
+@click.option(
+    "--store-failures",
+    is_flag=True,
+    help="Persist failing test rows to dbt_ml_test_failures__* tables.",
+)
 @click.pass_context
 def build(
     ctx: click.Context,
@@ -483,6 +488,7 @@ def build(
     select: str | None,
     exclude: str | None,
     threads: int,
+    store_failures: bool,
 ) -> None:
     """Run and test each model in dependency order; downstream models are skipped
     when an upstream model errors or fails a test."""
@@ -498,6 +504,7 @@ def build(
             target=target,
             profiles_dir=profiles_dir,
             threads=threads,
+            store_failures=store_failures,
         )
     except (ConfigError, DAGError, SelectionError, RunError, ProfileError) as e:
         raise click.ClickException(str(e)) from e
@@ -540,15 +547,31 @@ def _echo_build(result: BuildResult) -> None:
         for t in result.test_results:
             click.echo(
                 f"{t.model_name:<22}{t.test_name:<14}{(t.column or ''):<22}"
-                f"{t.status:<8}{t.message}"
+                f"{t.status:<8}{_test_message(t)}"
             )
+
+
+def _test_message(t: TestResult) -> str:
+    if t.failures_table:
+        return f"{t.message} [stored {t.failure_count} rows in {t.failures_table}]"
+    return t.message
 
 
 @cli.command()
 @click.option("--select", "select", default=None, help="Selector expression for models to test.")
 @click.option("--exclude", default=None, help="Selector expression for models to skip.")
+@click.option(
+    "--store-failures",
+    is_flag=True,
+    help="Persist failing test rows to dbt_ml_test_failures__* tables.",
+)
 @click.pass_context
-def test(ctx: click.Context, select: str | None, exclude: str | None) -> None:
+def test(
+    ctx: click.Context,
+    select: str | None,
+    exclude: str | None,
+    store_failures: bool,
+) -> None:
     """Run schema tests against materialized tables."""
     project_dir: Path = ctx.obj["project_dir"]
     profiles_dir = ctx.obj["profiles_dir"]
@@ -560,6 +583,7 @@ def test(ctx: click.Context, select: str | None, exclude: str | None) -> None:
             exclude=exclude,
             target=target,
             profiles_dir=profiles_dir,
+            store_failures=store_failures,
         )
     except (ConfigError, DAGError, SelectionError, ProfileError) as e:
         raise click.ClickException(str(e)) from e
@@ -577,7 +601,7 @@ def test(ctx: click.Context, select: str | None, exclude: str | None) -> None:
     for r in results:
         click.echo(
             f"{r.model_name:<22}{r.test_name:<14}{(r.column or ''):<22}"
-            f"{r.status:<8}{r.message}"
+            f"{r.status:<8}{_test_message(r)}"
         )
     click.echo("-" * 90)
     summary = f"{passed} passed"

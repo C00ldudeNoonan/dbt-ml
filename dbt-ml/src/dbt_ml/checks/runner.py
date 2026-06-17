@@ -17,6 +17,7 @@ def run_project_tests(
     exclude: str | None = None,
     target: str | None = None,
     profiles_dir: Path | None = None,
+    store_failures: bool = False,
 ) -> list[TestResult]:
     project, sources, models = load_project(project_dir)
     resolved = resolve_profile(
@@ -32,7 +33,12 @@ def run_project_tests(
                 continue
             if not model.tests:
                 continue
-            results.extend(run_model_tests(model, adapter, project_dir=project_dir))
+            results.extend(
+                run_model_tests(
+                    model, adapter, project_dir=project_dir,
+                    store_failures=store_failures,
+                )
+            )
     return results
 
 
@@ -41,6 +47,7 @@ def run_model_tests(
     adapter: WarehouseAdapter,
     *,
     project_dir: Path | None = None,
+    store_failures: bool = False,
 ) -> list[TestResult]:
     table_ref = adapter.table_ref(model.name)
     out: list[TestResult] = []
@@ -53,6 +60,7 @@ def run_model_tests(
                     table_ref=table_ref,
                     adapter=adapter,
                     project_dir=project_dir,
+                    store_failures=store_failures,
                 )
             )
         except UnknownTestError as e:

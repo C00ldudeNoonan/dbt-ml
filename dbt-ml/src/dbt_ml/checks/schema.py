@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import polars as pl
 
 from ..adapters import WarehouseAdapter
 from .python import CustomTestError, run_python_test
@@ -38,6 +41,8 @@ class TestResult:
     status: str  # "pass" | "warn" | "fail"
     message: str = ""
     severity: str = "error"
+    failures_table: str | None = None
+    failure_count: int | None = None
 
     @property
     def passed(self) -> bool:
@@ -56,6 +61,7 @@ def evaluate_test_spec(
     table_ref: str,
     adapter: WarehouseAdapter,
     project_dir: Path | None = None,
+    store_failures: bool = False,
 ) -> list[TestResult]:
     """Parse one test spec and run it.
 
@@ -64,10 +70,15 @@ def evaluate_test_spec(
         {not_null: [a, b]}                           -> single-key mapping
         {not_null: [a, b], severity: warn}           -> with severity sibling key
         {python: my.module.path}                     -> custom Python test
+
+    When `store_failures` is set, supporting tests persist their failing rows to
+    a `dbt_ml_test_failures__…` table and record it on the result.
     """
     if isinstance(spec, str):
         return _apply_severity(
-            _run_named_test(spec, None, model_name, table_ref, adapter, project_dir),
+            _run_named_test(
+                spec, None, model_name, table_ref, adapter, project_dir, store_failures
+            ),
             "error",
         )
     if isinstance(spec, dict):
@@ -83,7 +94,9 @@ def evaluate_test_spec(
             )
         ((test_name, arg),) = body.items()
         return _apply_severity(
-            _run_named_test(test_name, arg, model_name, table_ref, adapter, project_dir),
+            _run_named_test(
+                test_name, arg, model_name, table_ref, adapter, project_dir, store_failures
+            ),
             severity,
         )
     raise UnknownTestError(f"Unsupported test spec: {spec!r}")
@@ -103,6 +116,8 @@ def _apply_severity(results: list[TestResult], severity: str) -> list[TestResult
                 status=new_status,
                 message=r.message,
                 severity=severity,
+                failures_table=r.failures_table,
+                failure_count=r.failure_count,
             )
         )
     return out
@@ -115,11 +130,12 @@ def _run_named_test(
     table_ref: str,
     adapter: WarehouseAdapter,
     project_dir: Path | None,
+    store_failures: bool = False,
 ) -> list[TestResult]:
     if test_name == "not_null":
-        return _not_null(model_name, table_ref, adapter, arg)
+        return _not_null(model_name, table_ref, adapter, arg, store_failures)
     if test_name == "unique":
-        return [_unique(model_name, table_ref, adapter, arg)]
+        return [_unique(model_name, table_ref, adapter, arg, store_failures)]
     if test_name == "min_rows":
         return [_min_rows(model_name, table_ref, adapter, int(arg))]
     if test_name == "not_empty":
@@ -132,20 +148,63 @@ def _run_named_test(
             )
         return [_python(model_name, table_ref, adapter, str(arg), project_dir)]
     if test_name == "matches_regex":
-        return [_matches_regex(model_name, table_ref, adapter, arg)]
+        return [_matches_regex(model_name, table_ref, adapter, arg, store_failures)]
     if test_name == "accepted_values":
-        return [_accepted_values(model_name, table_ref, adapter, arg)]
+        return [_accepted_values(model_name, table_ref, adapter, arg, store_failures)]
     if test_name == "accepted_range":
-        return [_accepted_range(model_name, table_ref, adapter, arg)]
+        return [_accepted_range(model_name, table_ref, adapter, arg, store_failures)]
     if test_name == "null_rate":
-        return [_null_rate(model_name, table_ref, adapter, arg)]
+        return [_null_rate(model_name, table_ref, adapter, arg, store_failures)]
     if test_name == "grounded_in":
         return [_grounded_in(model_name, table_ref, adapter, arg)]
     if test_name == "relationships":
-        return [_relationships(model_name, table_ref, adapter, arg)]
+        return [_relationships(model_name, table_ref, adapter, arg, store_failures)]
     raise UnknownTestError(
         f"Unknown test '{test_name}'. Supported: {sorted(SUPPORTED_TESTS)}"
     )
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"\W+", "_", value).strip("_")
+
+
+def _failures_table_name(model_name: str, test_name: str, column: str | None) -> str:
+    parts = ["dbt_ml_test_failures", _slug(model_name), _slug(test_name)]
+    if column:
+        parts.append(_slug(str(column)))
+    return "__".join(parts)
+
+
+def _store(
+    adapter: WarehouseAdapter,
+    model_name: str,
+    test_name: str,
+    column: str | None,
+    select_sql: str,
+    params: list[Any] | None,
+    result: TestResult,
+) -> None:
+    """Materialize the rows selected by `select_sql` into a failures table and
+    annotate `result` with the table name + row count."""
+    table = _failures_table_name(model_name, test_name, column)
+    df = adapter.query_df(select_sql, params)
+    adapter.materialize_full(table, df)
+    result.failures_table = table
+    result.failure_count = df.height
+
+
+def _store_df(
+    adapter: WarehouseAdapter,
+    model_name: str,
+    test_name: str,
+    column: str | None,
+    df: pl.DataFrame,
+    result: TestResult,
+) -> None:
+    table = _failures_table_name(model_name, test_name, column)
+    adapter.materialize_full(table, df)
+    result.failures_table = table
+    result.failure_count = df.height
 
 
 def _not_null(
@@ -153,22 +212,26 @@ def _not_null(
     table_ref: str,
     adapter: WarehouseAdapter,
     arg: Any,
+    store_failures: bool = False,
 ) -> list[TestResult]:
     cols = arg if isinstance(arg, list) else [arg]
     results: list[TestResult] = []
     for col in cols:
-        count = adapter.scalar(
-            f'SELECT COUNT(*) FROM {table_ref} WHERE "{col}" IS NULL'
-        ) or 0
-        results.append(
-            TestResult(
-                test_name="not_null",
-                model_name=model_name,
-                column=col,
-                status="pass" if count == 0 else "fail",
-                message="" if count == 0 else f"{count} rows have NULL {col}",
-            )
+        where = f'"{col}" IS NULL'
+        count = adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}") or 0
+        result = TestResult(
+            test_name="not_null",
+            model_name=model_name,
+            column=col,
+            status="pass" if count == 0 else "fail",
+            message="" if count == 0 else f"{count} rows have NULL {col}",
         )
+        if count and store_failures:
+            _store(
+                adapter, model_name, "not_null", col,
+                f"SELECT * FROM {table_ref} WHERE {where}", None, result,
+            )
+        results.append(result)
     return results
 
 
@@ -177,6 +240,7 @@ def _unique(
     table_ref: str,
     adapter: WarehouseAdapter,
     arg: Any,
+    store_failures: bool = False,
 ) -> TestResult:
     cols = arg if isinstance(arg, list) else [arg]
     col_list = ", ".join(f'"{c}"' for c in cols)
@@ -186,13 +250,22 @@ def _unique(
         f"  GROUP BY {col_list} HAVING COUNT(*) > 1"
         f")"
     ) or 0
-    return TestResult(
+    result = TestResult(
         test_name="unique",
         model_name=model_name,
         column=",".join(cols),
         status="pass" if count == 0 else "fail",
         message="" if count == 0 else f"{count} duplicate groups on {cols}",
     )
+    if count and store_failures:
+        _store(
+            adapter, model_name, "unique", ",".join(cols),
+            f"SELECT * FROM {table_ref} WHERE ({col_list}) IN ("
+            f"  SELECT {col_list} FROM {table_ref}"
+            f"  GROUP BY {col_list} HAVING COUNT(*) > 1)",
+            None, result,
+        )
+    return result
 
 
 def _python(
@@ -251,56 +324,67 @@ def _require_dict(test_name: str, arg: Any) -> dict[str, Any]:
 
 
 def _matches_regex(
-    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any
+    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any,
+    store_failures: bool = False,
 ) -> TestResult:
     """Every non-null value of `column` matches `pattern`. Deterministic."""
-    import re
-
     opts = _require_dict("matches_regex", arg)
     column = opts["column"]
     pattern = re.compile(opts["pattern"])
 
-    df = adapter.query_df(f'SELECT "{column}" AS v FROM {table_ref}')
-    values = [v for v in df["v"].to_list() if v is not None]
-    misses = [str(v) for v in values if not pattern.search(str(v))]
+    df = adapter.query_df(f"SELECT * FROM {table_ref}")
+    col_values = df[column].to_list() if column in df.columns else []
+    mask = [v is not None and not pattern.search(str(v)) for v in col_values]
+    misses = [str(v) for v, m in zip(col_values, mask, strict=True) if m]
     n = len(misses)
     sample = ", ".join(repr(m) for m in misses[:3])
-    return TestResult(
+    result = TestResult(
         test_name="matches_regex",
         model_name=model_name,
         column=column,
         status="pass" if n == 0 else "fail",
         message="" if n == 0 else f"{n} values don't match {opts['pattern']!r} (e.g. {sample})",
     )
+    if n and store_failures:
+        _store_df(
+            adapter, model_name, "matches_regex", column,
+            df.filter(pl.Series(mask)), result,
+        )
+    return result
 
 
 def _accepted_values(
-    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any
+    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any,
+    store_failures: bool = False,
 ) -> TestResult:
     """Every non-null value of `column` is in `values`. Deterministic, SQL aggregate."""
     opts = _require_dict("accepted_values", arg)
     column = opts["column"]
     allowed = opts["values"]
     placeholders = ", ".join(["?"] * len(allowed))
+    where = f'"{column}" IS NOT NULL AND "{column}" NOT IN ({placeholders})'
     bad = (
-        adapter.scalar(
-            f'SELECT COUNT(*) FROM {table_ref} '
-            f'WHERE "{column}" IS NOT NULL AND "{column}" NOT IN ({placeholders})',
-            list(allowed),
-        )
+        adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}", list(allowed))
         or 0
     )
-    return TestResult(
+    result = TestResult(
         test_name="accepted_values",
         model_name=model_name,
         column=column,
         status="pass" if bad == 0 else "fail",
         message="" if bad == 0 else f"{bad} values outside {allowed}",
     )
+    if bad and store_failures:
+        _store(
+            adapter, model_name, "accepted_values", column,
+            f"SELECT * FROM {table_ref} WHERE {where}", list(allowed), result,
+        )
+    return result
 
 
 def _accepted_range(
-    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any
+    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any,
+    store_failures: bool = False,
 ) -> TestResult:
     """Numeric `column` within [min, max] (either bound optional). SQL aggregate."""
     opts = _require_dict("accepted_range", arg)
@@ -315,27 +399,27 @@ def _accepted_range(
         params.append(opts["max"])
     if not conds:
         raise UnknownTestError("accepted_range requires at least one of: min, max")
-    where = " OR ".join(conds)
-    bad = (
-        adapter.scalar(
-            f'SELECT COUNT(*) FROM {table_ref} '
-            f'WHERE "{column}" IS NOT NULL AND ({where})',
-            params,
-        )
-        or 0
-    )
+    where = f'"{column}" IS NOT NULL AND ({" OR ".join(conds)})'
+    bad = adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}", params) or 0
     bounds = f"[{opts.get('min', '-inf')}, {opts.get('max', 'inf')}]"
-    return TestResult(
+    result = TestResult(
         test_name="accepted_range",
         model_name=model_name,
         column=column,
         status="pass" if bad == 0 else "fail",
         message="" if bad == 0 else f"{bad} values outside {bounds}",
     )
+    if bad and store_failures:
+        _store(
+            adapter, model_name, "accepted_range", column,
+            f"SELECT * FROM {table_ref} WHERE {where}", params, result,
+        )
+    return result
 
 
 def _null_rate(
-    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any
+    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any,
+    store_failures: bool = False,
 ) -> TestResult:
     """Fraction of NULLs in `column` is <= `max`. The #1 silent extraction failure."""
     opts = _require_dict("null_rate", arg)
@@ -347,17 +431,22 @@ def _null_rate(
             test_name="null_rate", model_name=model_name, column=column,
             status="pass", message="empty table",
         )
-    nulls = adapter.scalar(
-        f'SELECT COUNT(*) FROM {table_ref} WHERE "{column}" IS NULL'
-    ) or 0
+    where = f'"{column}" IS NULL'
+    nulls = adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}") or 0
     rate = nulls / total
-    return TestResult(
+    result = TestResult(
         test_name="null_rate",
         model_name=model_name,
         column=column,
         status="pass" if rate <= max_rate else "fail",
         message=f"null_rate={rate:.3f} (max {max_rate:.3f}, {nulls}/{total})",
     )
+    if result.status == "fail" and store_failures:
+        _store(
+            adapter, model_name, "null_rate", column,
+            f"SELECT * FROM {table_ref} WHERE {where}", None, result,
+        )
+    return result
 
 
 def _grounded_in(
@@ -411,7 +500,8 @@ def _grounded_in(
 
 
 def _relationships(
-    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any
+    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any,
+    store_failures: bool = False,
 ) -> TestResult:
     """Referential integrity: every non-null `column` value exists in the parent
     model's `field` column.
@@ -429,15 +519,12 @@ def _relationships(
         )
     parent_name = parse_ref(str(opts["to"]))
     parent_ref = adapter.table_ref(parent_name)
-    bad = (
-        adapter.scalar(
-            f'SELECT COUNT(*) FROM {table_ref} '
-            f'WHERE "{column}" IS NOT NULL AND "{column}" NOT IN '
-            f'(SELECT "{field}" FROM {parent_ref} WHERE "{field}" IS NOT NULL)'
-        )
-        or 0
+    where = (
+        f'"{column}" IS NOT NULL AND "{column}" NOT IN '
+        f'(SELECT "{field}" FROM {parent_ref} WHERE "{field}" IS NOT NULL)'
     )
-    return TestResult(
+    bad = adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}") or 0
+    result = TestResult(
         test_name="relationships",
         model_name=model_name,
         column=column,
@@ -448,6 +535,12 @@ def _relationships(
             else f"{bad} '{column}' values missing from {parent_name}.{field}"
         ),
     )
+    if bad and store_failures:
+        _store(
+            adapter, model_name, "relationships", column,
+            f"SELECT * FROM {table_ref} WHERE {where}", None, result,
+        )
+    return result
 
 
 def _fuzzy_contains(needle: str, haystack: str, min_score: float) -> bool:
