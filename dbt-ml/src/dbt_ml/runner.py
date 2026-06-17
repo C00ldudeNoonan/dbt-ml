@@ -142,6 +142,7 @@ def build_project(
     target: str | None = None,
     profiles_dir: Path | None = None,
     threads: int = 1,
+    store_failures: bool = False,
 ) -> BuildResult:
     """Run + test each model in dependency order. A model whose run errors or
     whose tests hard-fail blocks all its descendants, which are reported as
@@ -195,7 +196,9 @@ def build_project(
                 blocked |= dag.descendants(name)
                 continue
 
-            model_tests = run_model_tests(model, adapter, project_dir=project_dir)
+            model_tests = run_model_tests(
+                model, adapter, project_dir=project_dir, store_failures=store_failures
+            )
             out.test_results.extend(model_tests)
             if any(t.is_hard_failure for t in model_tests):
                 blocked |= dag.descendants(name)

@@ -88,7 +88,9 @@ dbt-ml seed [--count N] [--type {invoices,posts,...,tickets,emails}]
 dbt-ml compile                                             # parse YAML, validate DAG, write manifest.json
 dbt-ml graph                                               # Mermaid DAG to stdout
 dbt-ml run [--select EXPR] [--exclude EXPR] [--full-refresh] [--threads N] [--watch]
-dbt-ml test [--select EXPR] [--exclude EXPR]
+dbt-ml test [--select EXPR] [--exclude EXPR] [--store-failures]
+dbt-ml build [--select EXPR] [--exclude EXPR] [--full-refresh] [--threads N] [--store-failures]
+dbt-ml ls [--select EXPR] [--resource-type {model,source,all}] [--output {name,json}]
 dbt-ml show <model> [--limit N]                            # peek at a materialized table
 dbt-ml source freshness                                    # mtime vs warn_after/error_after
 dbt-ml docs generate [--output DIR]                        # static HTML site from manifest.json
@@ -242,6 +244,7 @@ tests:
   - min_rows: 100
   - not_empty                            # bare-string form of min_rows: 1
   - not_null: total, severity: warn      # warn doesn't fail the run
+  - relationships: { column: vendor_id, to: ref('vendors'), field: id }  # referential integrity
   - python: tests.my_check               # custom: tests/my_check.py defines run(con, table_ref) -> str | None
 ```
 
@@ -262,6 +265,17 @@ tests:
 
 `grounded_in` also supports `method: fuzzy` with a `min_score`. These run as
 full-table aggregates, so they stay cheap and reproducible.
+
+**Inspecting failures.** Pass `--store-failures` to `dbt-ml test` or `dbt-ml
+build` to persist the offending rows of each failing test to a
+`dbt_ml_test_failures__<model>__<test>[__<column>]` table (replaced each run).
+The test output reports the table name and row count. These tables are
+inspection artifacts and are kept out of the model namespace (they don't show up
+in `dbt-ml ls` or `emit-dbt-sources`).
+
+**`dbt-ml build`** runs and tests each model in dependency order, skipping a
+model's descendants when it errors or fails a test — so a bad upstream extraction
+stops before it pollutes everything downstream.
 
 ## Examples in this repo
 

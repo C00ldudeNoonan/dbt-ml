@@ -142,8 +142,10 @@ class DuckDBAdapter(WarehouseAdapter):
             return self.connection.execute(sql)
         return self.connection.execute(sql, params)
 
-    def query_df(self, sql: str) -> pl.DataFrame:
-        return self.connection.execute(sql).pl()
+    def query_df(self, sql: str, params: list[Any] | None = None) -> pl.DataFrame:
+        if params is None:
+            return self.connection.execute(sql).pl()
+        return self.connection.execute(sql, params).pl()
 
     def scalar(self, sql: str, params: list[Any] | None = None) -> Any:
         row = self.execute(sql, params).fetchone()
@@ -168,7 +170,10 @@ class DuckDBAdapter(WarehouseAdapter):
             "ORDER BY table_name",
             [self.catalog, self.schema],
         ).fetchall()
-        return [r[0] for r in rows]
+        # `dbt_ml_test_failures__*` tables are --store-failures inspection
+        # artifacts, not models; keep them out of the model namespace. (Filtered
+        # in Python because `_` is a LIKE wildcard in SQL.)
+        return [r[0] for r in rows if not r[0].startswith("dbt_ml_test_failures__")]
 
     # ─── state CRUD ──────────────────────────────────────────────────────
 
