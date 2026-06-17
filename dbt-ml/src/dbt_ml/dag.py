@@ -95,6 +95,10 @@ class ProjectDAG:
     def execution_order(self) -> list[str]:
         return [name for name in self._sorted if self.nodes[name].kind == NodeKind.MODEL]
 
+    def descendants(self, name: str) -> set[str]:
+        """All nodes transitively downstream of `name` (excluding `name`)."""
+        return _bfs(name, self.successors)
+
     def parallel_batches(self, names: list[str]) -> list[list[str]]:
         """Group `names` into topological generations: each batch may run
         concurrently, and every batch depends only on earlier ones. Dependencies

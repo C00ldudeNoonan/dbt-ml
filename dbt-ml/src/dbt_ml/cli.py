@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from collections.abc import Callable
@@ -19,7 +20,7 @@ from .docs import DocsError, generate_docs, serve_docs
 from .freshness import check_freshness
 from .manifest import write_manifest, write_run_results
 from .profile import ProfileError, resolve_profile
-from .runner import RunError, clean_project, run_project
+from .runner import BuildResult, RunError, build_project, clean_project, run_project
 from .synth import (
     generate_arxiv_papers,
     generate_invoice_pdfs,
@@ -292,6 +293,86 @@ def graph(ctx: click.Context) -> None:
     click.echo(dag.to_mermaid())
 
 
+@cli.command(name="ls")
+@click.option("--select", "select", default=None, help="Selector expression for models.")
+@click.option("--exclude", default=None, help="Selector expression for models to skip.")
+@click.option(
+    "--resource-type",
+    type=click.Choice(["model", "source", "all"], case_sensitive=False),
+    default="model",
+    show_default=True,
+    help="Which resources to list. Selectors apply to models.",
+)
+@click.option(
+    "--output",
+    type=click.Choice(["name", "json"], case_sensitive=False),
+    default="name",
+    show_default=True,
+    help="Output format.",
+)
+@click.pass_context
+def ls(
+    ctx: click.Context,
+    select: str | None,
+    exclude: str | None,
+    resource_type: str,
+    output: str,
+) -> None:
+    """List project resources (models/sources) matching a selector."""
+    project_dir: Path = ctx.obj["project_dir"]
+    _, sources, models = _load(project_dir)
+    dag = _build_dag(sources, models)
+    models_by_name = {m.name: m for m in models}
+
+    rows: list[dict[str, object]] = []
+    if resource_type in ("model", "all"):
+        try:
+            selected = dag.select_models(select=select, exclude=exclude)
+        except SelectionError as e:
+            raise click.ClickException(str(e)) from e
+        for name in selected:
+            model = models_by_name[name]
+            rows.append(
+                {
+                    "name": name,
+                    "resource_type": "model",
+                    "kind": _model_kind(model),
+                    "tags": sorted(model.tags),
+                }
+            )
+    if resource_type in ("source", "all"):
+        for s in sources:
+            rows.append(
+                {
+                    "name": s.name,
+                    "resource_type": "source",
+                    "kind": "source",
+                    "tags": sorted(s.tags),
+                }
+            )
+
+    if not rows:
+        click.echo("No resources matched.")
+        return
+
+    if output == "json":
+        click.echo(json.dumps(rows, indent=2))
+        return
+    for row in rows:
+        tags = ",".join(row["tags"]) if row["tags"] else "-"  # type: ignore[arg-type]
+        click.echo(f"{row['name']:<24}{row['resource_type']:<10}{row['kind']:<12}{tags}")
+
+
+def _model_kind(model: ModelConfig) -> str:
+    if model.extraction is not None:
+        return "extraction"
+    if model.ml is not None:
+        return "ml"
+    if model.transform is not None:
+        return "transform"
+    return "unknown"
+
+
 @cli.command()
 @click.option(
     "--full-refresh", is_flag=True, help="Ignore incremental state and reprocess everything."
@@ -380,6 +461,87 @@ def run(
 
     if any(r.errors for r in results):
         ctx.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--full-refresh", is_flag=True, help="Ignore incremental state and reprocess everything."
+)
+@click.option("--select", "select", default=None, help="Selector expression.")
+@click.option("--exclude", default=None, help="Selector expression for nodes to exclude.")
+@click.option(
+    "--threads",
+    type=int,
+    default=1,
+    show_default=True,
+    help="Parallel worker threads per extraction model.",
+)
+@click.pass_context
+def build(
+    ctx: click.Context,
+    full_refresh: bool,
+    select: str | None,
+    exclude: str | None,
+    threads: int,
+) -> None:
+    """Run and test each model in dependency order; downstream models are skipped
+    when an upstream model errors or fails a test."""
+    project_dir: Path = ctx.obj["project_dir"]
+    profiles_dir = ctx.obj["profiles_dir"]
+    target = ctx.obj["target"]
+    try:
+        result = build_project(
+            project_dir,
+            full_refresh=full_refresh,
+            select=select,
+            exclude=exclude,
+            target=target,
+            profiles_dir=profiles_dir,
+            threads=threads,
+        )
+    except (ConfigError, DAGError, SelectionError, RunError, ProfileError) as e:
+        raise click.ClickException(str(e)) from e
+
+    write_manifest(project_dir, target=target, profiles_dir=profiles_dir)
+    write_run_results(project_dir, result.run_results)
+
+    _echo_build(result)
+
+    failed_tests = sum(1 for t in result.test_results if t.status == "fail")
+    errored_models = sum(1 for r in result.run_results if r.errors)
+    if failed_tests or errored_models or result.skipped:
+        ctx.exit(1)
+
+
+def _echo_build(result: BuildResult) -> None:
+    if not result.run_results and not result.skipped:
+        click.echo("No models selected.")
+        return
+
+    rheader = f"{'model':<22}{'kind':<12}{'rows':>8}{'time(s)':>10}  status"
+    click.echo(rheader)
+    click.echo("-" * len(rheader))
+    for r in result.run_results:
+        status = "ERROR" if r.errors else "ok"
+        click.echo(
+            f"{r.model_name:<22}{r.kind:<12}{r.rows_written:>8}"
+            f"{r.duration_seconds:>10.3f}  {status}"
+        )
+        for err in r.errors:
+            click.echo(f"  ERROR: {err}", err=True)
+    for name in result.skipped:
+        click.echo(f"{name:<22}{'-':<12}{'-':>8}{'-':>10}  SKIPPED (upstream failed)")
+
+    if result.test_results:
+        click.echo("")
+        theader = f"{'model':<22}{'test':<14}{'column':<22}{'status':<8}{'message'}"
+        click.echo(theader)
+        click.echo("-" * 90)
+        for t in result.test_results:
+            click.echo(
+                f"{t.model_name:<22}{t.test_name:<14}{(t.column or ''):<22}"
+                f"{t.status:<8}{t.message}"
+            )
 
 
 @cli.command()
