@@ -170,7 +170,10 @@ class DuckDBAdapter(WarehouseAdapter):
             "ORDER BY table_name",
             [self.catalog, self.schema],
         ).fetchall()
-        return [r[0] for r in rows]
+        # `dbt_ml_test_failures__*` tables are --store-failures inspection
+        # artifacts, not models; keep them out of the model namespace. (Filtered
+        # in Python because `_` is a LIKE wildcard in SQL.)
+        return [r[0] for r in rows if not r[0].startswith("dbt_ml_test_failures__")]
 
     # ─── state CRUD ──────────────────────────────────────────────────────
 

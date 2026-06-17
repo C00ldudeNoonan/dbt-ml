@@ -156,6 +156,37 @@ def test_store_failures_in_memory_test_persists_rows(
     assert set(stored["vendor"].to_list()) == {"B", "C", "D"}
 
 
+def test_store_failures_grounded_in(populated_db: WarehouseAdapter) -> None:
+    populated_db.materialize_full(
+        "grounding",
+        pl.DataFrame(
+            {
+                "value": ["Acme", "Hallucinated", "Beta"],
+                "source": [
+                    "Invoice from Acme Corp",
+                    "totally unrelated text",
+                    "Beta line item",
+                ],
+            }
+        ),
+    )
+    results = evaluate_test_spec(
+        {"grounded_in": {"value": "value", "source": "source"}},
+        model_name="grounding",
+        table_ref=populated_db.table_ref("grounding"),
+        adapter=populated_db,
+        store_failures=True,
+    )
+    r = results[0]
+    assert not r.passed
+    assert r.failure_count == 1
+    assert r.failures_table is not None
+    stored = populated_db.query_df(
+        f"SELECT * FROM {populated_db.table_ref(r.failures_table)}"
+    )
+    assert stored["value"].to_list() == ["Hallucinated"]
+
+
 def test_store_failures_noop_when_passing(populated_db: WarehouseAdapter) -> None:
     results = evaluate_test_spec(
         {"not_null": "id"},

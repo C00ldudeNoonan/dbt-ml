@@ -43,6 +43,17 @@ def test_duckdb_creates_schema_and_state(tmp_path: Path) -> None:
         assert cnt == 1
 
 
+def test_list_tables_excludes_failures_tables(tmp_path: Path) -> None:
+    with create_adapter(_wh(tmp_path / "t.duckdb")) as adapter:
+        adapter.materialize_full("model_a", pl.DataFrame({"x": [1]}))
+        adapter.materialize_full(
+            "dbt_ml_test_failures__model_a__not_null__x", pl.DataFrame({"x": [1]})
+        )
+        tables = adapter.list_tables()
+        assert "model_a" in tables
+        assert all(not t.startswith("dbt_ml_test_failures__") for t in tables)
+
+
 def test_state_upsert_and_fetch(tmp_path: Path) -> None:
     with create_adapter(_wh(tmp_path / "t.duckdb")) as adapter:
         adapter.upsert_state(

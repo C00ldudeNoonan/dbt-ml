@@ -156,7 +156,7 @@ def _run_named_test(
     if test_name == "null_rate":
         return [_null_rate(model_name, table_ref, adapter, arg, store_failures)]
     if test_name == "grounded_in":
-        return [_grounded_in(model_name, table_ref, adapter, arg)]
+        return [_grounded_in(model_name, table_ref, adapter, arg, store_failures)]
     if test_name == "relationships":
         return [_relationships(model_name, table_ref, adapter, arg, store_failures)]
     raise UnknownTestError(
@@ -450,7 +450,8 @@ def _null_rate(
 
 
 def _grounded_in(
-    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any
+    model_name: str, table_ref: str, adapter: WarehouseAdapter, arg: Any,
+    store_failures: bool = False,
 ) -> TestResult:
     """Deterministic faithfulness proxy: the `value` column's text must appear in
     (or fuzzy-match) the `source` column's text — catching hallucinated values
@@ -464,14 +465,13 @@ def _grounded_in(
     method = opts.get("method", "exact")
     min_score = float(opts.get("min_score", 0.8))
 
-    df = adapter.query_df(
-        f'SELECT "{value_col}" AS val, "{source_col}" AS src FROM {table_ref}'
-    )
-    ungrounded = 0
+    df = adapter.query_df(f"SELECT * FROM {table_ref}")
+    mask: list[bool] = []  # True marks an ungrounded (failing) row
     checked = 0
     for row in df.iter_rows(named=True):
-        val, src = row["val"], row["src"]
+        val, src = row.get(value_col), row.get(source_col)
         if val is None or src is None or str(val).strip() == "":
+            mask.append(False)
             continue
         checked += 1
         v = str(val).lower().strip()
@@ -480,10 +480,10 @@ def _grounded_in(
             grounded = v in s
         else:  # fuzzy: best partial ratio of val against any window is approximated
             grounded = v in s or _fuzzy_contains(v, s, min_score)
-        if not grounded:
-            ungrounded += 1
+        mask.append(not grounded)
 
-    return TestResult(
+    ungrounded = sum(mask)
+    result = TestResult(
         test_name="grounded_in",
         model_name=model_name,
         column=value_col,
@@ -497,6 +497,12 @@ def _grounded_in(
             )
         ),
     )
+    if ungrounded and store_failures:
+        _store_df(
+            adapter, model_name, "grounded_in", value_col,
+            df.filter(pl.Series(mask)), result,
+        )
+    return result
 
 
 def _relationships(

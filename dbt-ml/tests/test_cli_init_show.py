@@ -21,6 +21,36 @@ def _copy_example(tmp_path: Path, example_project_dir: Path) -> Path:
     return dst
 
 
+def test_test_store_failures_persists_and_reports(
+    tmp_path: Path, example_project_dir: Path
+) -> None:
+    dst = _copy_example(tmp_path, example_project_dir)
+    generate_invoices(5, dst / "data" / "invoices", seed=1)
+    run_project(dst)
+
+    # currency is USD/EUR/etc in synthetic data — XXX guarantees every row fails.
+    raw = dst / "models" / "raw_invoices.yml"
+    raw.write_text(
+        raw.read_text().replace(
+            "tests:",
+            "tests:\n      - accepted_values: {column: currency, values: [XXX]}",
+            1,
+        )
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["--project-dir", str(dst), "test", "--store-failures"]
+    )
+    assert result.exit_code == 1, result.output
+    assert "stored" in result.output
+    table = "dbt_ml_test_failures__raw_invoices__accepted_values__currency"
+    assert table in result.output
+
+    show = runner.invoke(cli, ["--project-dir", str(dst), "ls"])
+    assert table not in show.output  # inspection table, not a model
+
+
 def test_ls_lists_models(tmp_path: Path, example_project_dir: Path) -> None:
     dst = _copy_example(tmp_path, example_project_dir)
     runner = CliRunner()
