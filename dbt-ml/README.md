@@ -80,6 +80,21 @@ extraction, dbt handoff) is opt-in on top.
 Add a new backend = drop a file under `src/dbt_ml/backends/`, inherit from
 `BaseBackend`, decorate with `@register`. No plugin system needed for v1.
 
+## Security Notes
+
+dbt-ml projects are local code-and-data projects. Only run projects you trust:
+Python transforms and custom Python tests execute in your Python process, and
+project YAML controls source globs, warehouse paths, cache paths, and artifact
+paths.
+
+Document parsers process local files with third-party libraries. Keep
+dependencies current before running dbt-ml over untrusted PDFs, HTML, email, or
+other documents, since malformed files can trigger parser CPU or memory bugs.
+
+The `llm` backend sends document text to the configured model provider and stores
+cached structured responses in the configured cache database. Use deterministic
+local backends for sensitive documents unless remote processing is intended.
+
 ## The CLI
 
 ```
