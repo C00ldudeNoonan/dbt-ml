@@ -3,7 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from .identifiers import validate_node_name
 
@@ -71,7 +78,43 @@ class ModelConfig(BaseModel):
     def _validate_name(cls, v: str) -> str:
         return validate_node_name(v, kind="Model", reserve_internal=True)
 
+    @model_validator(mode="after")
+    def _validate_single_kind(self) -> ModelConfig:
+        kinds = [
+            label
+            for label, block in (
+                ("extraction", self.extraction),
+                ("transform", self.transform),
+                ("ml", self.ml),
+            )
+            if block is not None
+        ]
+        if len(kinds) > 1:
+            raise ValueError(
+                f"Model '{self.name}' declares multiple kind blocks "
+                f"({', '.join(kinds)}); exactly one of extraction/transform/ml "
+                "is allowed"
+            )
+        return self
+
+    @property
+    def kind_block_count(self) -> int:
+        return sum(b is not None for b in (self.extraction, self.transform, self.ml))
+
 
 class ModelFile(BaseModel):
     version: int = 2
     models: list[ModelConfig]
+
+    @model_validator(mode="after")
+    def _validate_models_have_kind(self) -> ModelFile:
+        # Bare ModelConfig (no kind block) is allowed programmatically (DAG
+        # fixtures, docs tooling); models loaded from project YAML must
+        # declare what they run.
+        missing = [m.name for m in self.models if m.kind_block_count == 0]
+        if missing:
+            raise ValueError(
+                f"Models missing an extraction/transform/ml block: "
+                f"{', '.join(sorted(missing))}"
+            )
+        return self

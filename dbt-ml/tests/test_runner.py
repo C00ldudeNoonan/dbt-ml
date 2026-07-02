@@ -7,9 +7,17 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from dbt_ml.config.source import SourceConfig
 from dbt_ml.manifest import write_run_results
-from dbt_ml.runner import RunError, build_project, clean_project, run_project
+from dbt_ml.runner import (
+    RunError,
+    _discover_source,
+    build_project,
+    clean_project,
+    run_project,
+)
 from dbt_ml.synth import generate_invoices, generate_support_tickets
+from dbt_ml.versioning import compute_document_id
 
 
 def test_build_runs_and_tests_in_order(fresh_project: Path) -> None:
@@ -712,3 +720,17 @@ def test_classic_ml_tfidf_character_ngrams(tmp_path: Path) -> None:
         "WHERE term = 'abc' GROUP BY term",
     )
     assert rows == [("abc", 1)]
+
+
+def test_discover_source_uses_posix_relative_paths(tmp_path: Path) -> None:
+    """document_id hashes the relative path, so separators must be `/` on
+    every OS — otherwise state written on Windows invalidates on Linux (#67)."""
+    nested = tmp_path / "data" / "batch_a"
+    nested.mkdir(parents=True)
+    (nested / "doc.json").write_text("{}")
+
+    refs = _discover_source(
+        SourceConfig(name="docs", path="data", file_pattern="*.json"), tmp_path
+    )
+    assert [r.relative_path for r in refs] == ["batch_a/doc.json"]
+    assert refs[0].document_id == compute_document_id("docs", "batch_a/doc.json")
