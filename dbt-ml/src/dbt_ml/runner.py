@@ -238,7 +238,8 @@ def _discover_source(source: SourceConfig, project_dir: Path) -> list[DocumentRe
     files = sorted(p for p in source_dir.glob(pattern) if p.is_file())
     refs: list[DocumentRef] = []
     for p in files:
-        relative_path = str(p.relative_to(source_dir))
+        # POSIX separators so document_id is stable across OSes (issue #67)
+        relative_path = p.relative_to(source_dir).as_posix()
         refs.append(
             DocumentRef(
                 source_name=source.name,

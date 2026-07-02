@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from dbt_ml.config import ConfigError, load_project
+from dbt_ml.config.model import ModelConfig, ModelFile
 
 
 def test_load_example_project(example_project_dir: Path) -> None:
@@ -111,3 +112,35 @@ def test_loads_classic_ml_model_config(tmp_path: Path) -> None:
     assert ml_model.ml.artifact.path == Path("target/artifacts/ticket_tfidf")
     assert ml_model.ml.metrics == ["vocabulary_size"]
     assert ml_model.ml.options["max_features"] == 50000
+
+
+def test_multiple_kind_blocks_rejected() -> None:
+    with pytest.raises(ValueError, match="multiple kind blocks"):
+        ModelConfig(
+            name="conflicted",
+            extraction={"backend": "json"},
+            transform={"type": "python", "module": "transforms.x"},
+        )
+
+
+def test_model_file_requires_kind_block() -> None:
+    with pytest.raises(ValueError, match="missing an extraction/transform/ml block"):
+        ModelFile.model_validate(
+            {"version": 2, "models": [{"name": "kindless"}]}
+        )
+
+
+def test_bare_model_config_allowed_programmatically() -> None:
+    # DAG fixtures and docs tooling build ModelConfig directly without a
+    # kind block; only the YAML load path requires one.
+    assert ModelConfig(name="fixture_only").kind_block_count == 0
+
+
+def test_kindless_model_fails_at_load(tmp_path: Path) -> None:
+    (tmp_path / "dbt_ml_project.yml").write_text("name: p\n")
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "m.yml").write_text(
+        "version: 2\nmodels:\n  - name: no_kind\n"
+    )
+    with pytest.raises(ConfigError, match="no_kind"):
+        load_project(tmp_path)

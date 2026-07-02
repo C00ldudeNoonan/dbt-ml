@@ -54,7 +54,7 @@ def _check_one(source: SourceConfig, project_dir: Path) -> FreshnessResult:
     now = time.time()
     newest = max(files, key=lambda p: p.stat().st_mtime)
     age = now - newest.stat().st_mtime
-    relative = str(newest.relative_to(source_dir))
+    relative = newest.relative_to(source_dir).as_posix()
 
     if source.freshness is None:
         return FreshnessResult(
