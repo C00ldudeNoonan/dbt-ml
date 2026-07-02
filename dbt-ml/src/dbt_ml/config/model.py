@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+
+from .identifiers import validate_node_name
 
 
 class ExtractionConfig(BaseModel):
@@ -63,6 +65,11 @@ class ModelConfig(BaseModel):
     materialization: Literal["full", "incremental"] = "full"
     tests: list[Any] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        return validate_node_name(v, kind="Model", reserve_internal=True)
 
 
 class ModelFile(BaseModel):

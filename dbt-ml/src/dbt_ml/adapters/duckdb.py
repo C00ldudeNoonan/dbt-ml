@@ -81,7 +81,7 @@ class DuckDBAdapter(WarehouseAdapter):
 
     @property
     def schema_ref(self) -> str:
-        return f'"{self.catalog}"."{self.schema}"'
+        return f"{self.quote_ident(self.catalog)}.{self.quote_ident(self.schema)}"
 
     # ─── materialization ─────────────────────────────────────────────────
 
@@ -109,11 +109,12 @@ class DuckDBAdapter(WarehouseAdapter):
                 f"SELECT * FROM dbt_ml_staging LIMIT 0"
             )
             if key_col in df.columns:
+                key = self.quote_ident(key_col)
                 self.connection.execute(
                     f"""
                     DELETE FROM {full} AS target
                     USING dbt_ml_staging AS source
-                    WHERE target."{key_col}" = source."{key_col}"
+                    WHERE target.{key} = source.{key}
                     """
                 )
             self.connection.execute(f"INSERT INTO {full} SELECT * FROM dbt_ml_staging")
@@ -127,7 +128,8 @@ class DuckDBAdapter(WarehouseAdapter):
         full = self.table_ref(table)
         placeholders = ", ".join("?" for _ in keys)
         cursor = self.connection.execute(
-            f'DELETE FROM {full} WHERE "{key_col}" IN ({placeholders})', keys
+            f"DELETE FROM {full} WHERE {self.quote_ident(key_col)} IN ({placeholders})",
+            keys,
         )
         deleted = cursor.fetchone()
         return int(deleted[0]) if deleted else 0

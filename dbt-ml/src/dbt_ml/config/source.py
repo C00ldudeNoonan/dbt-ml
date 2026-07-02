@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .identifiers import validate_node_name
 
 
 class DurationSpec(BaseModel):
@@ -27,6 +29,11 @@ class SourceConfig(BaseModel):
     recursive: bool = True
     tags: list[str] = Field(default_factory=list)
     freshness: FreshnessConfig | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        return validate_node_name(v, kind="Source")
 
 
 class SourceFile(BaseModel):
