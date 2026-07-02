@@ -83,8 +83,15 @@ class WarehouseAdapter(ABC):
     def schema_ref(self) -> str:
         """Quoted, fully-qualified schema reference for use in SQL."""
 
+    def quote_ident(self, name: str) -> str:
+        """Quote a single SQL identifier. ANSI rules (double quotes, embedded
+        quotes doubled); adapters with other dialects override. Every table,
+        schema, catalog, and column name interpolated into SQL must pass
+        through here — values stay in bound parameters."""
+        return '"' + name.replace('"', '""') + '"'
+
     def table_ref(self, table: str) -> str:
-        return f"{self.schema_ref}.{table}"
+        return f"{self.schema_ref}.{self.quote_ident(table)}"
 
     # ─── materialization ──────────────────────────────────────────────────
 

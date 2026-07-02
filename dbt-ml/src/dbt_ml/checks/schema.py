@@ -217,7 +217,7 @@ def _not_null(
     cols = arg if isinstance(arg, list) else [arg]
     results: list[TestResult] = []
     for col in cols:
-        where = f'"{col}" IS NULL'
+        where = f"{adapter.quote_ident(col)} IS NULL"
         count = adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}") or 0
         result = TestResult(
             test_name="not_null",
@@ -243,7 +243,7 @@ def _unique(
     store_failures: bool = False,
 ) -> TestResult:
     cols = arg if isinstance(arg, list) else [arg]
-    col_list = ", ".join(f'"{c}"' for c in cols)
+    col_list = ", ".join(adapter.quote_ident(c) for c in cols)
     count = adapter.scalar(
         f"SELECT COUNT(*) FROM ("
         f"  SELECT {col_list} FROM {table_ref}"
@@ -362,7 +362,8 @@ def _accepted_values(
     column = opts["column"]
     allowed = opts["values"]
     placeholders = ", ".join(["?"] * len(allowed))
-    where = f'"{column}" IS NOT NULL AND "{column}" NOT IN ({placeholders})'
+    col = adapter.quote_ident(column)
+    where = f"{col} IS NOT NULL AND {col} NOT IN ({placeholders})"
     bad = (
         adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}", list(allowed))
         or 0
@@ -389,17 +390,18 @@ def _accepted_range(
     """Numeric `column` within [min, max] (either bound optional). SQL aggregate."""
     opts = _require_dict("accepted_range", arg)
     column = opts["column"]
+    col = adapter.quote_ident(column)
     conds = []
     params: list[Any] = []
     if "min" in opts:
-        conds.append(f'"{column}" < ?')
+        conds.append(f"{col} < ?")
         params.append(opts["min"])
     if "max" in opts:
-        conds.append(f'"{column}" > ?')
+        conds.append(f"{col} > ?")
         params.append(opts["max"])
     if not conds:
         raise UnknownTestError("accepted_range requires at least one of: min, max")
-    where = f'"{column}" IS NOT NULL AND ({" OR ".join(conds)})'
+    where = f'{col} IS NOT NULL AND ({" OR ".join(conds)})'
     bad = adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}", params) or 0
     bounds = f"[{opts.get('min', '-inf')}, {opts.get('max', 'inf')}]"
     result = TestResult(
@@ -431,7 +433,7 @@ def _null_rate(
             test_name="null_rate", model_name=model_name, column=column,
             status="pass", message="empty table",
         )
-    where = f'"{column}" IS NULL'
+    where = f"{adapter.quote_ident(column)} IS NULL"
     nulls = adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}") or 0
     rate = nulls / total
     result = TestResult(
@@ -525,9 +527,11 @@ def _relationships(
         )
     parent_name = parse_ref(str(opts["to"]))
     parent_ref = adapter.table_ref(parent_name)
+    col = adapter.quote_ident(column)
+    parent_col = adapter.quote_ident(str(field))
     where = (
-        f'"{column}" IS NOT NULL AND "{column}" NOT IN '
-        f'(SELECT "{field}" FROM {parent_ref} WHERE "{field}" IS NOT NULL)'
+        f"{col} IS NOT NULL AND {col} NOT IN "
+        f"(SELECT {parent_col} FROM {parent_ref} WHERE {parent_col} IS NOT NULL)"
     )
     bad = adapter.scalar(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}") or 0
     result = TestResult(
