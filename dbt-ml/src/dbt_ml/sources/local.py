@@ -10,7 +10,6 @@ from pathlib import Path, PurePosixPath
 
 from ..config.loader import ConfigError
 from ..config.source import SourceConfig, validate_file_pattern
-from ..hashing import HASH_DIGEST_SIZE
 from ..paths import resolve_within_project
 from ..versioning import compute_document_id
 from .base import DocumentRef, DocumentSource, SourceError, SourceScan
@@ -120,7 +119,7 @@ def _symlink_error(
 
 
 def _hash_fd(fd: int) -> str:
-    digest = hashlib.blake2b(digest_size=HASH_DIGEST_SIZE)
+    digest = hashlib.blake2b(digest_size=8)
     while chunk := os.read(fd, _HASH_CHUNK_SIZE):
         digest.update(chunk)
     return digest.hexdigest()
@@ -447,7 +446,7 @@ class LocalDocumentSource(DocumentSource):
         destination_dir = work_dir / ref.document_id
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / Path(ref.relative_path).name
-        digest = hashlib.blake2b(digest_size=HASH_DIGEST_SIZE)
+        digest = hashlib.blake2b(digest_size=8)
         try:
             with destination.open("wb") as output:
                 while chunk := os.read(file_fd, _HASH_CHUNK_SIZE):

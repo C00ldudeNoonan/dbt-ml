@@ -15,7 +15,6 @@ from ..config.profile import (
     DEFAULT_LLM_API_KEY_ENV,
     resolve_llm_credential,
 )
-from ..hashing import HASH_DIGEST_SIZE
 from .base import BaseBackend, ExtractionResult
 from .options import LLMBackendOptions, validate_llm_numeric_options
 from .registry import register
@@ -161,9 +160,7 @@ class LLMBackend(BaseBackend):
             except Exception as e:
                 by_index[i] = e
                 continue
-            content_hash = hashlib.blake2b(
-                text.encode(), digest_size=HASH_DIGEST_SIZE
-            ).hexdigest()
+            content_hash = hashlib.blake2b(text.encode(), digest_size=8).hexdigest()
             cache_key = f"{model}|{content_hash}|{schema_hash}"
             cached = (
                 _cache_get(cache_path_obj, cache_key)
@@ -328,9 +325,7 @@ def extract_fields_with_usage(
             "max_concurrent": max_concurrent,
         }
     )
-    content_hash = hashlib.blake2b(
-        text.encode(), digest_size=HASH_DIGEST_SIZE
-    ).hexdigest()
+    content_hash = hashlib.blake2b(text.encode(), digest_size=8).hexdigest()
     schema_hash = _hash_schema(system, fields_spec, temperature)
     cache_key = f"{model}|{content_hash}|{schema_hash}"
 
@@ -495,9 +490,7 @@ def _hash_schema(
         sort_keys=True,
         separators=(",", ":"),
     )
-    return hashlib.blake2b(
-        canonical.encode(), digest_size=HASH_DIGEST_SIZE
-    ).hexdigest()
+    return hashlib.blake2b(canonical.encode(), digest_size=8).hexdigest()
 
 
 def _cache_get(path: Path, key: str) -> dict[str, Any] | None:

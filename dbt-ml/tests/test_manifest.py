@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from dbt_ml.hashing import HASH_DIGEST_SIZE
 from dbt_ml.manifest import (
     MANIFEST_FILENAME,
     RUN_RESULTS_FILENAME,
@@ -46,10 +45,7 @@ def test_manifest_shape(fresh_project: Path) -> None:
 def test_manifest_has_code_versions(fresh_project: Path) -> None:
     m = build_manifest(fresh_project)
     versions = {x["name"]: x["code_version"] for x in m["models"]}
-    assert all(
-        isinstance(v, str) and len(v) == HASH_DIGEST_SIZE * 2
-        for v in versions.values()
-    )
+    assert all(isinstance(v, str) and len(v) == 16 for v in versions.values())
 
 
 def test_manifest_emits_ml_models(tmp_path: Path) -> None:
